@@ -62,6 +62,7 @@ else
 	harvest_from_config();
 }
 
+exit;
 
 #this function will continue harvesting across api windows, using list of usernames that need harvesting
 sub harvest_from_config
