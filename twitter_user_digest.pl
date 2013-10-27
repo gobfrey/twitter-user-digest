@@ -12,24 +12,25 @@ use Cwd;
 use File::Copy;
 use Config::IniFiles;
 
-#we always want the largest page available for friends and followers, which is currently 200.
-my $F_PAGE_SIZE = 200;
-#don't even try to harvest if there are more than MAX friends or followers (this is one page less than the max that can be got through the API, just in case)
-my $MAX_F = 200 * 14;
-
 #we will be checking these API limits
-my @APIS_USED = qw( 
-search/tweets
-users/lookup
-friends/list
-followers/list
+#this maps the Net::Twitter method to its API call
+my %API_MAP = ( 
+search => 'search/tweets',
+lookup_users => 'users/lookup',
+friends_ids => 'friends/ids',
+followers_ids => 'followers/ids'
 );
 
+#CONFIG is global, but accessed through the cfg fucntion
 my $CONFIG;
+#VERBOSE is global, but only checked in the output_status function
 my $VERBOSE = 0;
-my $username = undef;
+#API_LIMITS is global, but only modified by the initialise_api_limits and the can_make_api_call functions
+my $API_LIMITS = {};
+#TWITTER is global, but accessed through the query_twitter method
+my $TWITTER;
+
 my $config_file = undef;
-my $target_dir = getcwd();
 
 my $LOG = {
 	harvest_count => {},
@@ -40,32 +41,220 @@ my $LOG = {
 Getopt::Long::Configure("permute");
 GetOptions(
         'verbose' => \$VERBOSE,
-        'username=s' => \$username,
         'config=s' => \$config_file,
-	'save-to=s' => \$target_dir,
 );
 
 if (!$config_file)
 {
-	my $msg = "twitter_user_digest.pl --config=<configfile> [--username=<screen_name>] [--save-to=<path>] [--verbose]\n";
-	$msg .= "  * If username is defined, only that username will be harvested (without spidering) and will be stored in the current directory or the --save-to path if defined\n";
+	my $msg = "twitter_user_digest.pl --config=<configfile> [--verbose]\n";
 	die $msg;
 }
+
 load_config($config_file);
 
-my $nt = connect_to_twitter();
-die "Couldn't connect to twitter\n" unless $nt;
+harvest_from_config();
 
-if ($username)
-{
-	harvest_single_user($target_dir, $username);
-}
-else
-{
-	harvest_from_config();
-}
-
+output_log();
 exit;
+
+
+
+#this function will continue harvesting across api windows, using list of usernames that need harvesting
+sub harvest_from_config
+{
+	check_paths();
+	my $working_dir = latest_session_dir();
+	my $session_state = session_dir_state($working_dir);
+
+	push @{$LOG->{messages}}, "Working on $working_dir";
+	output_status("working in $working_dir ($session_state)");
+
+	#if we're complete, create a new session dir if it's time
+	if ($session_state eq 'complete')
+	{
+		if (session_dir_expired($working_dir))
+		{
+			output_status('Update interval exceeded, starting new harvest session');
+			$working_dir = create_session_dir();
+			$session_state = 'empty';
+		}
+		else
+		{
+			output_status('No need to harvest yet, most recent harvest within the update interval');
+			push @{$LOG->{messages}}, 'Nothing to do';
+			return;
+		}
+	}
+
+	if ($session_state eq 'empty')
+	{
+		initialise_session_dir($working_dir);
+		$session_state = 'harvesting';
+	}
+
+	my $harvest_state = 'incomplete';
+	if ($session_state eq 'harvesting')
+	{
+		my $extras = { friends => 1, followers => 1, tweets => 0};
+		$harvest_state = harvest_from_users_file($working_dir, $working_dir . '/screen_names_to_harvest', 'screen_name', $extras);
+	}
+
+	if ($harvest_state eq 'complete')
+	{
+		initialise_spider_list($working_dir); #we could add a spider depth arg at this point
+		$session_state = 'spidering';
+	}
+
+	my $spider_state = 'incomplete';
+	if ($session_state eq 'spidering')
+	{
+		my $extras = { friends => 1, followers => 1, tweets => 0};
+		$spider_state = harvest_from_users_file($working_dir, $working_dir . '/user_ids_to_spider', 'user_id', $extras);
+	}
+
+	if ($spider_state eq 'complete')
+	{
+		write_to_file($working_dir . '/completion_timestamp', time);
+		$session_state = 'complete';
+		create_by_users($working_dir); #create human browsable structure
+	}
+	push @{$LOG->{messages}}, "Final State: $session_state";
+}
+
+sub harvest_from_users_file
+{
+	my ($working_dir, $users_file, $users_file_type, $bits_to_harvest) = @_;
+
+	my $user_info_state = get_basic_user_data($working_dir, $users_file, $users_file_type);
+	my $extra_data_state = enrich_in_session_dir($working_dir, $bits_to_harvest, $users_file, $users_file_type);
+
+	if ($user_info_state eq 'complete' && $extra_data_state eq 'complete')
+	{
+		return 'complete';
+	}
+	return 'incomplete';
+}
+
+
+#file type needs to be 'screen_name' or 'user_id'
+sub get_basic_user_data
+{
+	my ($session_dir, $users_file, $file_type) = @_;
+
+	my @user_refs = file_to_array($users_file);
+
+	while (1)
+	{
+		last if (!scalar @user_refs); #we've processed them all.
+
+		my @one_hundred;
+		#there's a max of 100 IDs that can be passed to twitter
+		#exit when 100 refs or we run out of refs
+		while (
+			scalar @one_hundred < 100
+			&& scalar @user_refs
+		)
+		{
+			my $id = shift @user_refs;
+
+			next if -e ("$session_dir/by_$file_type/$id"); #we've already harvested this one.
+			push @one_hundred, $id;
+		}
+
+		my $success = userlist_to_directories($session_dir, \@one_hundred, $file_type);
+
+		return 'incomplete' if !$success; #problem with the API, exit here
+	}
+	return 'complete';
+}
+
+#for every entry in the user file that has a directory, enrich if necessary
+#to be run after user data has been downloaded
+sub enrich_in_session_dir
+{
+	my ($session_dir, $bits_to_harvest, $users_file, $file_type) = @_;
+
+	my @user_refs = file_to_array($users_file);
+	my $json = JSON->new->allow_nonref;
+
+	my $complete = 1;
+	ENRICH_TYPE: foreach my $enrich_type (qw/ friends followers tweets /)
+	{
+		USER: foreach my $user (@user_refs)
+		{
+			my $user_dir = "$session_dir/by_$file_type/$user";
+			my $filename = "$user_dir/$enrich_type.json";
+			if (!-d $user_dir)
+			{
+				#there's no directory, the user info hasn't been downloaded yet
+				$complete = 0;
+				next;
+			}
+			next if -e $filename; #we've already done this
+
+			my $user_obj = json_file($user_dir . '/userdata.json');
+			if (!$user_obj)
+			{
+				$complete = 0;
+				next;
+			}
+
+			my $username = $user_obj->{screen_name};
+
+			if ($user_obj->{protected})
+			{
+				output_status("$user is protected, we'll get no rich data");
+				next USER;
+			}
+
+			output_status("Enriching $enrich_type for $username");
+
+			if (!valid_screen_name($username))
+			{
+				print STDERR "non-alpha character in username $username, skipping\n";
+				next;
+			}
+
+			my $data = get_user_data($username, $enrich_type);
+
+			if ($data)
+			{
+				$LOG->{harvest_count}->{$enrich_type}++;
+				my $json_data = $json->pretty->encode($data);
+
+				write_to_file($filename, $json_data);
+			}
+			else
+			{
+				$complete = 0;
+				next ENRICH_TYPE; #we're probably out of API for this type
+			}
+
+		}
+	}
+
+	if ($complete)
+	{
+		return 'complete';
+	}
+	return 'incomplete';
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 sub session_dir_expired
 {
@@ -87,85 +276,6 @@ sub session_dir_expired
 	{
 		return 0;
 	}
-}
-
-#this function will continue harvesting across api windows, using list of usernames that need harvesting
-sub harvest_from_config
-{
-	check_paths();
-
-	my $working_dir = latest_session_dir();
-
-	push @{$LOG->{messages}}, "Working on $working_dir";
-
-	my $session_state = session_dir_state($working_dir);
-	output_status("working in $working_dir ($session_state)");
-
-	if ($session_state eq 'complete')
-	{
-		if (session_dir_expired($working_dir))
-		{
-			output_status('Update interval exceeded, starting new harvest session');
-			$working_dir = create_session_dir();
-			$session_state = 'empty';
-		}
-		else
-		{
-			output_status('No need to harvest yet, most recent harvest within the update interval');
-			push @{$LOG->{messages}}, 'Nothing to do';
-			return;
-		}
-
-	}
-
-	if ($session_state eq 'empty')
-	{
-		initialise_session_dir($working_dir);
-		$session_state = 'harvesting';
-	}
-
-	my $harvest_state = 'incomplete';
-	if ($session_state eq 'harvesting')
-	{
-		my $users_file = $working_dir . '/screen_names_to_harvest';
-		my $user_info_state = harvest_in_session_dir($working_dir, $users_file, 'screen_name');
-		my $extras = { friends => 1, followers => 1, tweets => 1};
-		my $extra_data_state = enrich_in_session_dir($working_dir, $extras, $users_file, 'screen_name');
-
-		if ($user_info_state eq 'complete' && $extra_data_state eq 'complete')
-		{
-			$harvest_state = 'complete';
-		}
-	}
-
-	if ($harvest_state eq 'complete')
-	{
-		initialise_spider_list($working_dir); #we could add a spider depth arg at this point
-		$session_state = 'spidering';
-	}
-
-	my $spider_state = 'incomplete';
-	if ($session_state eq 'spidering')
-	{
-		my $users_file = $working_dir . '/user_ids_to_spider';
-		my $user_info_state = harvest_in_session_dir($working_dir, $users_file, 'user_id');
-		my $extras = { friends => 1, followers => 1, tweets => 0};
-		my $extra_data_state = enrich_in_session_dir($working_dir, $extras, $users_file, 'user_id');
-
-		if ($user_info_state eq 'complete' && $extra_data_state eq 'complete')
-		{
-			$harvest_state = 'complete';
-		}
-	}
-
-	if ($spider_state eq 'complete')
-	{
-		write_to_file($working_dir . '/completion_timestamp', time);
-		$session_state = 'complete';
-		create_by_users($working_dir); #create human browsable structure
-	}
-	push @{$LOG->{messages}}, "Got " . $LOG->{harvest_count} . " users' data.  Final State: $session_state";
-	output_log();
 }
 
 sub create_by_users
@@ -274,23 +384,12 @@ sub clone
 #takes a list of screen names or user IDs and populates a set of directories named by user ID
 sub userlist_to_directories
 {
-	my ($nt, $base_path, $userlist, $userlist_type) = @_;
+	my ($base_path, $userlist, $userlist_type) = @_;
 
-	my $users;
+	die "userlist_to_directories: More than 100 users in list\n" if scalar @{$userlist} > 100;
 
-	if (scalar @{$userlist} > 100)
-	{
-		die "userlist_to_directories: More than 100 users in list\n";
-	}
-
-	eval {
-		$users = $nt->lookup_users({$userlist_type => join(',',@{$userlist}), inlude_entities => 1});
-	};
-	if ($@)
-	{
-		print STDERR "$@\n";
-		return undef;
-	}
+	my $users = query_twitter('lookup_users', {$userlist_type => $userlist, include_entities => 1});
+	return undef unless $users; #probably out of API
 
 	my $json = JSON->new->allow_nonref;
 	foreach my $user (@{$users})
@@ -316,115 +415,6 @@ sub userlist_to_directories
 
 
 
-#file type needs to be 'screen_name' or 'user_id'
-sub harvest_in_session_dir
-{
-	my ($session_dir, $users_file, $file_type) = @_;
-
-	my $nt = connect_to_twitter();
-	die "Couldn't connect to twitter\n" unless $nt;
-
-	my @user_refs = file_to_array($users_file);
-
-	while (1)
-	{
-		last if (!scalar @user_refs); #we've processed them all.
-
-		my @one_hundred;
-		#there's a max of 100 IDs that can be passed to twitter
-		#exit when 100 refs or we run out of refs
-		while (
-			scalar @one_hundred < 100
-			&& scalar @user_refs
-		)
-		{
-			my $id = shift @user_refs;
-
-			next if -e ("$session_dir/by_$file_type/$id"); #we've already harvested this one.
-			push @one_hundred, $id;
-		}
-
-		my $success = userlist_to_directories($nt, $session_dir, \@one_hundred, $file_type);
-
-		return 'incomplete' if !$success; #problem with the API, exit here
-	}
-	return 'complete';
-}
-
-#for every entry in the user file that has a directory, enrich if necessary
-#to be run after user data has been downloaded
-sub enrich_in_session_dir
-{
-	my ($session_dir, $bits_to_harvest, $users_file, $file_type) = @_;
-
-	my $nt = connect_to_twitter();
-	die "Couldn't connect to twitter\n" unless $nt;
-
-	my @user_refs = file_to_array($users_file);
-	my $json = JSON->new->allow_nonref;
-
-	my $complete = 1;
-	ENRICH_TYPE: foreach my $enrich_type (qw/ friends followers tweets /)
-	{
-		USER: foreach my $user (@user_refs)
-		{
-			my $user_dir = "$session_dir/by_$file_type/$user";
-			my $filename = "$user_dir/$enrich_type.json";
-			if (!-d $user_dir)
-			{
-				#there's no directory, the user info hasn't been downloaded yet
-				$complete = 0;
-				next;
-			}
-			next if -e $filename; #we've already done this
-
-			my $user_obj = json_file($user_dir . '/userdata.json');
-			if (!$user_obj)
-			{
-				$complete = 0;
-				next;
-			}
-
-			$username = $user_obj->{screen_name};
-
-			if ($user_obj->{protected})
-			{
-				output_status("$user is protected, we'll get no rich data");
-				next USER;
-			}
-
-			output_status("Enriching $enrich_type for $username");
-
-			if (!valid_screen_name($username))
-			{
-				print STDERR "non-alpha character in username $username, skipping\n";
-				next;
-			}
-
-			my $data = get_user_data($nt, $username, $enrich_type);
-
-			if ($data)
-			{
-				$LOG->{harvest_count}->{$enrich_type}++;
-				my $json_data = $json->pretty->encode($data);
-
-				write_to_file($filename, $json_data);
-			}
-			else
-			{
-				$complete = 0;
-				next ENRICH_TYPE; #we're probably out of API for this type
-			}
-
-		}
-	}
-
-	if ($complete)
-	{
-		return 'complete';
-	}
-	return 'incomplete';
-}
 
 
 sub json_file
@@ -464,30 +454,6 @@ sub file_to_array
 	close FILE;
 
 	return @arr;
-}
-
-
-sub harvest_single_user
-{
-	my ($target_dir, $username) = @_;
-
-	die "$target_dir is not a directory\n" if (!-d $target_dir);
-	die "$username is not a valid username" if !valid_screen_name($username);
-
-	my $nt = connect_to_twitter();
-	die "Couldn't connect to twitter\n" unless $nt;
-
-	my $user_data = get_user_data($nt, $username);
-
-	if ($user_data)
-	{
-		my $path_parts = [$target_dir, $username, DateTime->now->datetime];
-		store_data($username, $user_data, $path_parts);
-	}
-	else
-	{
-		print STDERR "Problems with $username: no data being stored\n";
-	}
 }
 
 sub initialise_session_dir
@@ -575,11 +541,18 @@ sub output_log
 {
 	my $filename = cfg('system','log_file');
 
+	refresh_api_limits();
+
 	open FILE, ">>$filename" or die "Couldn't open $filename for writing\n";
 
 	print FILE "\n--------------------------------------------\n";
 	print FILE "Run completed at ", DateTime->now->datetime, "\n";
 	print FILE $LOG->{api_status}, "\n";
+	print FILE "Harvest Counts\n";
+	foreach my $count_type (keys %{$LOG->{harvest_count}})
+	{
+		print FILE "\t $count_type : ", $LOG->{harvest_count}->{$count_type}, "\n";
+	}
 	foreach my $msg (@{$LOG->{messages}})
 	{
 		print FILE "$msg\n";
@@ -588,197 +561,66 @@ sub output_log
 
 }
 
-sub store_data
-{
-	my ($username, $user_data, $path_parts) = @_;
-
-	#check/create that the directory is there
-	my $target_dir = path_from_parts($path_parts);
-	output_status("Writing data to $target_dir");
-
-	my $json = JSON->new->allow_nonref;
-	my $json_data = $json->pretty->encode($user_data);
-
-	my $filename = $target_dir . '/' . 'full_data.json';
-	write_to_file($filename, $json_data);
-
-	foreach my $p_type (qw/ friends followers /)
-	{
-		next unless $user_data->{$p_type} && ref($user_data->{$p_type});
-
-		my @people;
-		foreach my $p (@{$user_data->{$p_type}})
-		{
-			push @people, $p->{screen_name}; 
-		}
-		my $filename = $target_dir . '/' . $p_type;
-		write_to_file($filename, join("\n", sort {lc($a) cmp lc($b)} @people));
-	}
-
-}
-
 sub get_friends_or_followers
 {
-	my ($nt, $username, $f) = @_;
+	#$f set to either friends or followers
+	my ($username, $f) = @_;
 
-	my $data = [];
+	my $user_ids = [];
 	my $r = undef; #to hold one page of results
 
 	while (1)
 	{
+		output_status("Retrieving $f for $username...");
+
 		my $params = {
 			screen_name => $username,
 			include_user_entities => 1,
 		};
-
-		if ($r)
-		{
-			$params->{cursor} = $r->{next_cursor};
-		}
-
-		output_status("Retrieving $f for $username...");
+		$params->{cursor} = $r->{next_cursor} if $r;
 
 		my $method = $f .'_ids';
-		eval{
-			$r = $nt->$method($params);
-		};
-		if ($@)
-		{
-			print STDERR "$@\n";
-			return undef;
-		}
+
+		$r = query_twitter($method, $params);
+		return undef unless $r; #errors (and running out of API) return undef, pass upwards
 
 		output_status(scalar @{$r->{ids}} . " $f IDs returned.  Cursor is " . $r->{next_cursor});
 
-		push @{$data}, @{$r->{ids}};
+		push @{$user_ids}, @{$r->{ids}};
 		last unless $r->{next_cursor}; #will be 0 on the last page
 	}
-	return $data;
+	return $user_ids;
 }
 
 #todo: check harvest params for user
 sub get_user_data
 {
-	my ($nt, $username, $data_class) = @_;
+	my ($username, $data_class) = @_;
 
 	output_status("Retrieving $data_class User Information for $username...");
 	my $data;
 
-	if ($data_class eq 'friends')
+	if ($data_class eq 'friends' || $data_class eq 'followers')
 	{
-		$data = get_friends_or_followers($nt, $username, 'friends');
-		if (!$data)
-		{
-			return undef; #probably out of API, try again later.
-		} 
-
-	}
-	elsif ($data_class eq 'followers')
-	{
-		$data = get_friends_or_followers($nt, $username, 'followers');
-		if (!$data)
-		{
-			return undef; #probably out of API, try again later.
-		} 
+		$data = get_friends_or_followers($username, $data_class);
+		return undef unless defined $data; #probably out of API, try again later.
 	}
 	elsif ($data_class eq 'tweets')
 	{
-		#collect last page of tweet from and mentioning the user
-		my $params =
-		{
-			from => {
-				include_entities => 1,
-				q => "from:$username",
-				count => 100,
-			},
-			mentions => {
-				include_entities => 1,
-				q => "\@$username",
-				count => 100,
-			}
-		};
-
-		foreach my $k (keys %{$params})
-		{
-			output_status("Retrieving $k tweets for $username...");
-			eval{
-				$data->{$k} = $nt->search($params->{$k});
-			};
-			if ($@)
-			{
-				print STDERR "$@\n";
-				return undef;
-			}
-		}
+		$data = tweet_search("from:$username OR \@$username");
+		return undef unless defined $data;
 	}
 
 	return $data;
 }
 
-
-sub connect_to_twitter
+sub tweet_search
 {
-	output_status('Connecting to twitter');
-
-	my $key_file = cfg('system', 'api_keys_file');
-	my $keys = Config::IniFiles->new(-file => $key_file);
-
-	my %nt_args = (
-		consumer_key        => $keys->val('twitter_api_keys','consumer_key'),
-		consumer_secret     => $keys->val('twitter_api_keys','consumer_secret'),
-		access_token        => $keys->val('twitter_api_keys','access_token'),
-		access_token_secret => $keys->val('twitter_api_keys','access_token_secret'),
-		traits => [qw/API::RESTv1_1/]
-	);
-
-	my $nt = Net::Twitter::Lite::WithAPIv1_1->new( %nt_args );
-
-#handle this error properly?
-	if (!$nt->authorized)
-	{
-		output_status('Not authorized');
-		return undef;
-	}
-	return $nt;
-}
-
-sub api_limit
-{
-	my ($nt, $api) = @_;
-
-	my $limits = $nt->rate_limit_status;
-
-	my ($type, $operation) = split(/\//, $api);
-
-	return $limits->{resources}->{$type}->{"/$type/$operation"}->{remaining};
-};
-
-
-sub api_limits
-{
-	my ($nt) = @_;
-
-	my $limits = $nt->rate_limit_status;
-	my $empty = 0;
-	my $api_log_string = 'Last API Check: ';
-	foreach my $api (@APIS_USED)
-	{
-		my ($type, $operation) = split(/\//, $api);
-
-		my $remaining = $limits->{resources}->{$type}->{"/$type/$operation"}->{remaining};
-
-		$empty = 1 if !$remaining;
-		$api_log_string .= "$api -> $remaining ; ";
-		output_status("$api -> $remaining (reset at: " . scalar(localtime($limits->{resources}->{$type}->{"/$type/$operation"}->{reset})) . ")");
-	}
-
-	$LOG->{api_status} = $api_log_string;
-
-	if ($empty)
-	{
-		return 0;
-	}
-	return 1;
+	my ($q) = @_;
+	output_status("Tweet Search for '$q'...");
+	my $tweets = query_twitter('search', { q => $q, count => 100, include_entities => 1 });
+	return undef unless $tweets;
+	return $tweets->{statuses};
 }
 
 sub load_config
@@ -890,4 +732,105 @@ sub valid_screen_name
 	}
 	return 1;
 }
+
+
+#############################################################
+#
+# Twitter Layer
+#
+#############################################################
+
+
+sub can_make_api_call
+{
+	my ($api) = @_;
+
+	if (!$API_LIMITS->{_fresh})
+	{
+		refresh_api_limits();
+		$API_LIMITS->{_fresh} = 30; #number of local decrements of any api before the whole thing is refreshed
+	}
+	$API_LIMITS->{_fresh}--;
+	if (!$API_LIMITS->{$api})
+	{
+		return 0;
+	}
+	$API_LIMITS->{$api}--;
+	return 1;
+}
+
+sub refresh_api_limits
+{
+	my $limits = query_twitter('rate_limit_status');
+
+	my $api_log_string = 'Last API Check: ';
+	foreach my $api (values %API_MAP)
+	{
+		my ($type, $operation) = split(/\//, $api);
+
+		my $remaining = $limits->{resources}->{$type}->{"/$type/$operation"}->{remaining};
+
+		$API_LIMITS->{$api} = $remaining;
+		$api_log_string .= "$api -> $remaining ; ";
+	}
+	$api_log_string =~ s/ ; $//; #tidy up string (hack hack hack)
+
+	output_status($api_log_string);
+	$LOG->{api_status} = $api_log_string;
+}
+
+sub query_twitter
+{
+	my ($method, $args) = @_;
+
+	connect_to_twitter() if !$TWITTER;
+
+	if ($method ne 'rate_limit_status')
+	{
+		die "Unrecognised method: $method\n" unless $API_MAP{$method};
+		return undef unless can_make_api_call($API_MAP{$method});
+	}
+	else
+	{
+		return $TWITTER->rate_limit_status();
+	}
+
+	my $data;
+	eval {
+		$data = $TWITTER->$method($args);
+	};
+	if ($@)
+	{
+		print STDERR "$@\n";
+		return undef;
+	}
+
+	return $data;
+}
+
+sub connect_to_twitter
+{
+	output_status('Connecting to twitter');
+
+	my $key_file = cfg('system', 'api_keys_file');
+	my $keys = Config::IniFiles->new(-file => $key_file);
+
+	my %nt_args = (
+		consumer_key        => $keys->val('twitter_api_keys','consumer_key'),
+		consumer_secret     => $keys->val('twitter_api_keys','consumer_secret'),
+		access_token        => $keys->val('twitter_api_keys','access_token'),
+		access_token_secret => $keys->val('twitter_api_keys','access_token_secret'),
+		traits => [qw/API::RESTv1_1/]
+	);
+
+	$TWITTER = Net::Twitter::Lite::WithAPIv1_1->new( %nt_args );
+
+#handle this error properly?
+	if (!$TWITTER->authorized)
+	{
+		output_status('Not authorized');
+		return undef;
+	}
+}
+
 
