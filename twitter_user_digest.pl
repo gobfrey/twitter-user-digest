@@ -52,9 +52,11 @@ if (!$config_file)
 
 load_config($config_file);
 
+output_status('Starting Havesting');
 harvest_from_config();
 
 output_log();
+output_status('Harvesting Complete');
 exit;
 
 
@@ -95,7 +97,7 @@ sub harvest_from_config
 	my $harvest_state = 'incomplete';
 	if ($session_state eq 'harvesting')
 	{
-		my $extras = { friends => 1, followers => 1, tweets => 0};
+		my $extras = { friends => 1, followers => 1, tweets => 1};
 		$harvest_state = harvest_from_users_file($working_dir, $working_dir . '/screen_names_to_harvest', 'screen_name', $extras);
 	}
 
@@ -116,7 +118,8 @@ sub harvest_from_config
 	{
 		write_to_file($working_dir . '/completion_timestamp', time);
 		$session_state = 'complete';
-		create_by_users($working_dir); #create human browsable structure
+#now out of date and needs rewriting -- check if there's a requirement
+#		create_by_users($working_dir); #create human browsable structure
 	}
 	push @{$LOG->{messages}}, "Final State: $session_state";
 }
@@ -161,9 +164,11 @@ sub get_basic_user_data
 			push @one_hundred, $id;
 		}
 
-		my $success = userlist_to_directories($session_dir, \@one_hundred, $file_type);
-
-		return 'incomplete' if !$success; #problem with the API, exit here
+		if (scalar @one_hundred)
+		{
+			my $success = userlist_to_directories($session_dir, \@one_hundred, $file_type);
+			return 'incomplete' if !$success; #problem with the API, exit here
+		}
 	}
 	return 'complete';
 }
@@ -180,6 +185,7 @@ sub enrich_in_session_dir
 	my $complete = 1;
 	ENRICH_TYPE: foreach my $enrich_type (qw/ friends followers tweets /)
 	{
+		next unless $bits_to_harvest->{$enrich_type};
 		USER: foreach my $user (@user_refs)
 		{
 			my $user_dir = "$session_dir/by_$file_type/$user";
@@ -209,6 +215,7 @@ sub enrich_in_session_dir
 
 			output_status("Enriching $enrich_type for $username");
 
+			#paranoid check -- probably unnecessary
 			if (!valid_screen_name($username))
 			{
 				print STDERR "non-alpha character in username $username, skipping\n";
