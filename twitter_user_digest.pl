@@ -222,9 +222,20 @@ sub enrich_in_session_dir
 				next;
 			}
 
-			my $data = get_user_data($username, $enrich_type);
+			my $data;
+			if (
+				($enrich_type eq 'frields' || $enrich_type eq 'followers')
+				&& $user_obj->{$enrich_type . '_count'} > (15 * 5000) #the max accessible in a single window
+			)
+			{
+				$data = [];
+			}
+			else
+			{
+				$data = get_user_data($username, $enrich_type);
+			}
 
-			if ($data)
+			if (defined $data)
 			{
 				$LOG->{harvest_count}->{$enrich_type}++;
 				my $json_data = $json->pretty->encode($data);
