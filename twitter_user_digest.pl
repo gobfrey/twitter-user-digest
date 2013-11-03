@@ -97,7 +97,7 @@ sub harvest_from_config
 	my $harvest_state = 'incomplete';
 	if ($session_state eq 'harvesting')
 	{
-		my $extras = { friends => 1, followers => 1, tweets => 1};
+		my $extras = { friends => 1, followers => 1, tweets_from => 1, tweets_mentioning => 1};
 		$harvest_state = harvest_from_users_file($working_dir, $working_dir . '/screen_names_to_harvest', 'screen_name', $extras);
 	}
 
@@ -110,7 +110,7 @@ sub harvest_from_config
 	my $spider_state = 'incomplete';
 	if ($session_state eq 'spidering')
 	{
-		my $extras = { friends => 1, followers => 1, tweets => 0};
+		my $extras = { friends => 1, followers => 1, tweets_from => 1, tweets_mentioning => 1 };
 		$spider_state = harvest_from_users_file($working_dir, $working_dir . '/user_ids_to_spider', 'user_id', $extras);
 	}
 
@@ -166,8 +166,9 @@ sub get_basic_user_data
 
 		if (scalar @one_hundred)
 		{
-			my $success = userlist_to_directories($session_dir, \@one_hundred, $file_type);
-			return 'incomplete' if !$success; #problem with the API, exit here
+			my $status = userlist_to_directories($session_dir, \@one_hundred, $file_type);
+			
+			return 'incomplete' if $status != 200; #problem with the API, exit here
 		}
 	}
 	return 'complete';
@@ -183,7 +184,7 @@ sub enrich_in_session_dir
 	my $json = JSON->new->allow_nonref;
 
 	my $complete = 1;
-	ENRICH_TYPE: foreach my $enrich_type (qw/ friends followers tweets /)
+	ENRICH_TYPE: foreach my $enrich_type (keys %{$bits_to_harvest})
 	{
 		next unless $bits_to_harvest->{$enrich_type};
 		USER: foreach my $user (@user_refs)
@@ -222,32 +223,38 @@ sub enrich_in_session_dir
 				next;
 			}
 
-			my $data;
+			my ($status, $data);
 			if (
 				($enrich_type eq 'frields' || $enrich_type eq 'followers')
 				&& $user_obj->{$enrich_type . '_count'} > (15 * 5000) #the max accessible in a single window
 			)
 			{
 				$data = [];
+				$status = 200; #we'll pretend this is OK, but really it's unachievable
 			}
 			else
 			{
-				$data = get_user_data($username, $enrich_type);
+				($status, $data) = get_user_data($username, $enrich_type);
 			}
 
-			if (defined $data)
+			if ($status == 200) #all OK
 			{
 				$LOG->{harvest_count}->{$enrich_type}++;
 				my $json_data = $json->pretty->encode($data);
 
 				write_to_file($filename, $json_data);
 			}
-			else
+			elsif ($status == 429) # Out of API
 			{
+				output_status("Out of API for $enrich_type");
 				$complete = 0;
 				next ENRICH_TYPE; #we're probably out of API for this type
 			}
-
+			else #write empty data to the file.  It's probably a permissions error
+			{
+				output_status("HTTP STATUS $status for $enrich_type for $username.  Writing Empty Datafile.");
+				write_to_file($filename, $json->pretty->encode([]));
+			}	
 		}
 	}
 
@@ -406,8 +413,8 @@ sub userlist_to_directories
 
 	die "userlist_to_directories: More than 100 users in list\n" if scalar @{$userlist} > 100;
 
-	my $users = query_twitter('lookup_users', {$userlist_type => $userlist, include_entities => 1});
-	return undef unless $users; #probably out of API
+	my ($status, $users) = query_twitter('lookup_users', {$userlist_type => $userlist, include_entities => 1});
+	return $status unless $status == 200; #probably out of API
 
 	my $json = JSON->new->allow_nonref;
 	foreach my $user (@{$users})
@@ -428,7 +435,7 @@ sub userlist_to_directories
 		$LOG->{harvest_count}->{user_data}++;
 	}
 
-	return 1; #success
+	return $status; 
 }
 
 
@@ -586,6 +593,7 @@ sub get_friends_or_followers
 
 	my $user_ids = [];
 	my $r = undef; #to hold one page of results
+	my $status;
 
 	while (1)
 	{
@@ -599,15 +607,15 @@ sub get_friends_or_followers
 
 		my $method = $f .'_ids';
 
-		$r = query_twitter($method, $params);
-		return undef unless $r; #errors (and running out of API) return undef, pass upwards
+		($status, $r) = query_twitter($method, $params);
+		return ($status, undef) unless $status == 200; #errors (and running out of API) pass upwards
 
 		output_status(scalar @{$r->{ids}} . " $f IDs returned.  Cursor is " . $r->{next_cursor});
 
 		push @{$user_ids}, @{$r->{ids}};
 		last unless $r->{next_cursor}; #will be 0 on the last page
 	}
-	return $user_ids;
+	return (200, $user_ids);
 }
 
 #todo: check harvest params for user
@@ -616,29 +624,34 @@ sub get_user_data
 	my ($username, $data_class) = @_;
 
 	output_status("Retrieving $data_class User Information for $username...");
-	my $data;
+	my ($status, $data);
 
 	if ($data_class eq 'friends' || $data_class eq 'followers')
 	{
-		$data = get_friends_or_followers($username, $data_class);
-		return undef unless defined $data; #probably out of API, try again later.
+		($status, $data) = get_friends_or_followers($username, $data_class);
 	}
-	elsif ($data_class eq 'tweets')
+	elsif ($data_class eq 'tweets_from')
 	{
-		$data = tweet_search("from:$username OR \@$username");
-		return undef unless defined $data;
+		($status, $data) = tweet_search("from:$username");
+	}
+	elsif ($data_class eq 'tweets_mentioning')
+	{
+		($status, $data) = tweet_search("\@$username");
+	}
+	else
+	{
+		die "Unrecognised Data Class $data_class\n";
 	}
 
-	return $data;
+	return ($status, $data);
 }
 
 sub tweet_search
 {
 	my ($q) = @_;
 	output_status("Tweet Search for '$q'...");
-	my $tweets = query_twitter('search', { q => $q, count => 100, include_entities => 1 });
-	return undef unless $tweets;
-	return $tweets->{statuses};
+	my ($status, $data) = query_twitter('search', { q => $q, count => 100, include_entities => 1 });
+	return ($status, $data->{statuses});
 }
 
 sub load_config
@@ -694,7 +707,13 @@ sub check_paths
 {
 	my $path = cfg('system','storage_path');
 
-	foreach my $p ($path, by_user_path(), by_session_path())
+	my $paths = [
+		cfg('system','storage_path'),
+#		by_user_path(),
+		by_session_path()
+	];
+
+	foreach my $p (@{$paths})
 	{
 		path_from_parts([$p]);
 	}
@@ -806,24 +825,28 @@ sub query_twitter
 	if ($method ne 'rate_limit_status')
 	{
 		die "Unrecognised method: $method\n" unless $API_MAP{$method};
-		return undef unless can_make_api_call($API_MAP{$method});
+		return (429,undef) unless can_make_api_call($API_MAP{$method});
 	}
 	else
 	{
-		return $TWITTER->rate_limit_status();
+		return $TWITTER->rate_limit_status(); #rate_limit_status doesn't return ($status, $data)
 	}
 
 	my $data;
 	eval {
 		$data = $TWITTER->$method($args);
 	};
-	if ($@)
-	{
-		print STDERR "$@\n";
-		return undef;
+
+	if ( my $err = $@ ) {
+		if (!blessed $err || !$err->isa('Net::Twitter::Lite::Error'))
+		{
+			print STDERR "$@\n";
+			return ( 500, undef ); #internal server error -- it's not even a twitter error
+		}
+		return ($err->code, $data); #HTTP response code
 	}
 
-	return $data;
+	return( 200,  $data );
 }
 
 sub connect_to_twitter
