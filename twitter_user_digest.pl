@@ -250,6 +250,11 @@ sub enrich_in_session_dir
 				$complete = 0;
 				next ENRICH_TYPE; #we're probably out of API for this type
 			}
+			elsif ($status >= 500 && $status < 600)
+			{
+				print STDERR "$status: terminating";
+				last ENRICH_TYPE; #exit just to be safe
+			}
 			else #write empty data to the file.  It's probably a permissions error
 			{
 				output_status("HTTP STATUS $status for $enrich_type for $username.  Writing Empty Datafile.");
@@ -841,7 +846,7 @@ sub query_twitter
 		if (!blessed $err || !$err->isa('Net::Twitter::Lite::Error'))
 		{
 			print STDERR "$@\n";
-			return ( 500, undef ); #internal server error -- it's not even a twitter error
+			return ( 500, undef ); #probably 503 -- service unavailable
 		}
 		return ($err->code, $data); #HTTP response code
 	}
