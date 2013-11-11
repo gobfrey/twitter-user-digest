@@ -843,7 +843,7 @@ sub query_twitter
 	};
 
 	if ( my $err = $@ ) {
-		if (!blessed $err || !$err->isa('Net::Twitter::Lite::Error'))
+		if (!UNIVERSAL::can($err,'isa') || !$err->isa('Net::Twitter::Lite::Error'))
 		{
 			print STDERR "$@\n";
 			return ( 500, undef ); #probably 503 -- service unavailable
