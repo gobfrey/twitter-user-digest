@@ -11,6 +11,7 @@ use Getopt::Long;
 use Cwd;
 use File::Copy;
 use Config::IniFiles;
+use DBI;
 
 #we will be checking these API limits
 #this maps the Net::Twitter method to its API call
@@ -21,8 +22,11 @@ friends_ids => 'friends/ids',
 followers_ids => 'followers/ids'
 );
 
-#CONFIG is global, but accessed through the cfg fucntion
+#CONFIG and SECRETS are global, but accessed through the cfg and secret fucntion
 my $CONFIG;
+my $SECRETS;
+#DB is global, but accessed through the database layer fucntions
+my $DB;
 #VERBOSE is global, but only checked in the output_status function
 my $VERBOSE = 0;
 #API_LIMITS is global, but only modified by the initialise_api_limits and the can_make_api_call functions
@@ -52,6 +56,8 @@ if (!$config_file)
 
 load_config($config_file);
 
+initialise_db();
+
 output_status('Starting Havesting');
 harvest_from_config();
 
@@ -64,8 +70,25 @@ exit;
 #this function will continue harvesting across api windows, using list of usernames that need harvesting
 sub harvest_from_config
 {
-	check_paths();
-	my $working_dir = latest_session_dir();
+	my $session = latest_session();
+
+	use Data::Dumper;
+	print STDERR Dumper $session;
+
+	if (!$session)
+	{
+		$session = {
+			start_time => DateTime->now->datetime,
+			status => 'new'
+		};
+		db_write('session', $session);
+		$session = latest_session(); #we've loaded from the database, so we have an ID now.
+	}
+
+
+	exit;
+
+	my $working_dir = '';
 	my $session_state = session_dir_state($working_dir);
 
 	push @{$LOG->{messages}}, "Working on $working_dir";
@@ -98,7 +121,8 @@ sub harvest_from_config
 	if ($session_state eq 'harvesting')
 	{
 		my $extras = { friends => 1, followers => 1, tweets_from => 1, tweets_mentioning => 1};
-		$harvest_state = harvest_from_users_file($working_dir, $working_dir . '/screen_names_to_harvest', 'screen_name', $extras);
+
+		$harvest_state = harvest_from_users_file($working_dir, $working_dir . '/screen_names_to_harvest', $extras);
 	}
 
 	if ($harvest_state eq 'complete')
@@ -126,10 +150,10 @@ sub harvest_from_config
 
 sub harvest_from_users_file
 {
-	my ($working_dir, $users_file, $users_file_type, $bits_to_harvest) = @_;
+	my ($working_dir, $users_file, $bits_to_harvest) = @_;
 
-	my $user_info_state = get_basic_user_data($working_dir, $users_file, $users_file_type);
-	my $extra_data_state = enrich_in_session_dir($working_dir, $bits_to_harvest, $users_file, $users_file_type);
+	my $user_info_state = get_basic_user_data($working_dir, $users_file);
+	my $extra_data_state = enrich_in_session_dir($working_dir, $bits_to_harvest, $users_file);
 
 	if ($user_info_state eq 'complete' && $extra_data_state eq 'complete')
 	{
@@ -174,6 +198,9 @@ sub get_basic_user_data
 	return 'complete';
 }
 
+
+
+
 #for every entry in the user file that has a directory, enrich if necessary
 #to be run after user data has been downloaded
 sub enrich_in_session_dir
@@ -215,13 +242,6 @@ sub enrich_in_session_dir
 			}
 
 			output_status("Enriching $enrich_type for $username");
-
-			#paranoid check -- probably unnecessary
-			if (!valid_screen_name($username))
-			{
-				print STDERR "non-alpha character in username $username, skipping\n";
-				next;
-			}
 
 			my ($status, $data);
 			if (
@@ -492,9 +512,9 @@ sub initialise_session_dir
 
 	output_status("Initialising $dir");
 
-	my @screen_names = screen_names_from_config();
+	my @ids = ids_from_config();
 
-	write_to_file($dir . '/screen_names_to_harvest', join("\n", sort {lc($a) cmp lc($b)} @screen_names));
+	write_to_file($dir . '/ids_to_harvest', join("\n", sort {lc($a) cmp lc($b)} @ids));
 }
 
 sub write_to_file
@@ -513,13 +533,17 @@ sub session_dir_state
 {
 	my ($dir) = @_;
 
-	if (!-e $dir . '/screen_names_to_harvest')
+	if (!-e $dir . '/ids_to_harvest')
 	{
 		return 'empty';
 	}
-	if (!-e $dir . '/user_ids_to_spider')
+	if (!-e $dir . '/ids_to_spider')
 	{
 		return 'harvesting';
+	}
+	if (!-e $dir . '/ids_to_hydrate')
+	{
+		return 'hydrating';
 	}
 	if (!-e $dir . '/completion_timestamp')
 	{
@@ -666,6 +690,22 @@ sub load_config
 	$CONFIG = Config::IniFiles->new( -file => $filename );
 }
 
+sub load_secrets
+{
+	my ($filename) = @_;
+
+	$SECRETS = Config::IniFiles->new( -file => $filename );
+}
+
+
+sub secret
+{
+	my (@secret_path) = @_;
+
+	load_secrets(cfg('system','secrets')) unless $SECRETS;
+	return $SECRETS->val(@secret_path);
+}
+
 sub cfg
 {
 	my (@cfg_path) = @_;
@@ -673,14 +713,14 @@ sub cfg
 	return $CONFIG->val(@cfg_path);
 }
 
-sub screen_names_from_config
+sub ids_from_config
 {
 	my @user_groups = $CONFIG->GroupMembers('user');
 	my @users;
 	foreach my $user_group (@user_groups)
 	{
 		my ($group, $user) = split(/\s+/, $user_group);
-		push @users, $user if ($user && valid_screen_name($user)); #only alpha and _ -
+		push @users, $user if ($user && valid_id($user)); #only numeric
 	}
 	return @users;
 }
@@ -763,12 +803,12 @@ sub by_session_path
 }
 
 
-sub valid_screen_name
+sub valid_id
 {
-	my ($username) = @_;
+	my ($id) = @_;
 
 	#basic check -- this is user submitted data (probably)
-	if ($username =~ m/[^A-Za-z0-9_-]/)
+	if ($id =~ m/^[0-9]$/)
 	{
 		return 0;
 	}
@@ -858,14 +898,11 @@ sub connect_to_twitter
 {
 	output_status('Connecting to twitter');
 
-	my $key_file = cfg('system', 'api_keys_file');
-	my $keys = Config::IniFiles->new(-file => $key_file);
-
 	my %nt_args = (
-		consumer_key        => $keys->val('twitter_api_keys','consumer_key'),
-		consumer_secret     => $keys->val('twitter_api_keys','consumer_secret'),
-		access_token        => $keys->val('twitter_api_keys','access_token'),
-		access_token_secret => $keys->val('twitter_api_keys','access_token_secret'),
+		consumer_key        => secret('twitter_api_keys','consumer_key'),
+		consumer_secret     => secret('twitter_api_keys','consumer_secret'),
+		access_token        => secret('twitter_api_keys','access_token'),
+		access_token_secret => secret('twitter_api_keys','access_token_secret'),
 		traits => [qw/API::RESTv1_1/]
 	);
 
@@ -878,5 +915,154 @@ sub connect_to_twitter
 		return undef;
 	}
 }
+
+
+###############################
+#
+# Database Layer
+#
+###############################
+
+
+sub db_connect
+{
+	output_status('connecting to database');
+
+	my $database = cfg('database','db_name');
+	my $hostname = cfg('database','db_host');
+	my $port = cfg('database','db_port');
+	my $password = secret('database','db_password');
+	my $user = secret('database','db_username');
+
+	my $dsn = "DBI:mysql:database=$database;host=$hostname;port=$port";
+
+	$DB = DBI->connect($dsn, $user, $password)
+                or die "Couldn't connect to database: " . DBI->errstr;
+
+}
+
+sub initialise_db
+{
+	my $queries = [
+		'CREATE TABLE IF NOT EXISTS session (
+			id INT NOT NULL AUTO_INCREMENT,
+			start_time DATETIME,
+			end_time DATETIME,
+			status char(10),
+			PRIMARY KEY (id)
+		)',
+		'CREATE TABLE IF NOT EXISTS user (
+			session_id INT NOT NULL,
+			id INT NOT NULL,
+			json MEDIUMTEXT,
+			PRIMARY KEY (session_id, id),
+			FOREIGN KEY (session_id) REFERENCES session(id)
+		)',
+		'CREATE TABLE IF NOT EXISTS user_friends (
+			session_id INT NOT NULL,
+			user_id INT NOT NULL,
+			friend_id INT NOT NULL,
+			KEY (session_id, user_id),
+			FOREIGN KEY (session_id) REFERENCES session(id),
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+		)',
+		'CREATE TABLE IF NOT EXISTS user_followers (
+			session_id INT NOT NULL,
+			user_id INT NOT NULL,
+			follower_id INT NOT NULL,
+			KEY (session_id, user_id),
+			FOREIGN KEY (session_id) REFERENCES session(id),
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+		)',
+		'CREATE TABLE IF NOT EXISTS user_tweets_from (
+			session_id INT NOT NULL,
+			user_id INT NOT NULL,
+			json_tweets LONGTEXT,
+			PRIMARY KEY (session_id, user_id),
+			FOREIGN KEY (session_id) REFERENCES session(id),
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+		)',
+		'CREATE TABLE IF NOT EXISTS user_tweets_about (
+			session_id INT NOT NULL,
+			user_id INT NOT NULL,
+			json_tweets LONGTEXT,
+			PRIMARY KEY (session_id, user_id),
+			FOREIGN KEY (session_id) REFERENCES session(id),
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+		)',
+	];
+
+	db_query($_) foreach @{$queries};
+
+}
+
+sub db_query
+{
+	my ($sql, @args) = @_;
+
+	db_connect unless $DB; 
+
+	output_status("Running $sql");
+
+	my $sth = $DB->prepare($sql)
+		or die "Couldn't prepare statement: " . $DB->errstr;
+
+	$sth->execute(@args)
+		or die "Couldn't execute statement: " . $sth->errstr;
+
+	return $sth;
+}
+
+sub db_write
+{
+	my ($table_name, $hashref) = @_;
+
+	my @colnames;
+	my @values;
+	my @questionmarks;
+
+	foreach my $k (keys %{$hashref})
+	{
+		push @colnames, "`$k`";
+		push @values, $hashref->{$k};
+		push @questionmarks, '?';
+	}
+
+	my $sql = "INSERT INTO $table_name (" . join(', ',@colnames) . ') VALUES (' . join(', ',@questionmarks) . ')';
+	db_query($sql, @values);
+}
+
+sub db_update
+{
+	my ($table_name, $hashref) = @_;
+
+	die ("Cannot update with an id set") unless $hashref->{id};
+
+	my @bits;
+	my @values;
+	foreach my $k (keys %{$hashref})
+	{
+		next if $k eq 'id';
+		push @bits, "`$k`=?";
+		push @values, $hashref->{$k};
+	}
+
+	my $sql = "UPDATE $table_name SET " . join(', ', @bits) . " WHERE `id`=?";
+	push @values, $hashref->{id};
+
+	db_query($sql, @values);
+}
+
+sub latest_session
+{
+	my $sql = "SELECT * FROM session ORDER BY ID DESC limit 1";
+
+	my $sth = db_query($sql); 
+
+	my $session = $sth->fetchrow_hashref;
+
+	return $session;
+}
+
 
 
