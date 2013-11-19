@@ -65,24 +65,52 @@ output_log();
 output_status('Harvesting Complete');
 exit;
 
-
-
 #this function will continue harvesting across api windows, using list of usernames that need harvesting
 sub harvest_from_config
 {
-	my $session = latest_session();
+	my $session = load_latest_session();
+
+	if (!$session)
+	{
+		$session = create_session();
+	}
 
 	use Data::Dumper;
 	print STDERR Dumper $session;
 
-	if (!$session)
+	if ($session->{status} eq 'complete')
 	{
-		$session = {
-			start_time => DateTime->now->datetime,
-			status => 'new'
-		};
-		db_write('session', $session);
-		$session = latest_session(); #we've loaded from the database, so we have an ID now.
+		if (session_expired($session))
+		{
+			output_status('Previous harvest completed and interval exceeded, starting new session');
+			$session = create_session();
+		}
+		else
+		{
+			output_status('No need to harvest yet, most recent harvest within the update interval');
+			push @{$LOG->{messages}}, 'Nothing to do';
+			return;
+		}
+	}
+
+	if ($session->{status} eq 'new')
+	{
+		my $ids_to_harvest = ids_from_config();
+
+		foreach my $userid (@{$ids_to_harvest})
+		{
+			my $user = load_user($userid, $session->{id});
+			if (!$user)
+			{
+				$user = create_user($userid, $session->{id})
+			}
+
+			use Data::Dumper;
+			print STDERR Dumper $user;
+
+
+		}
+	
 	}
 
 
@@ -147,6 +175,58 @@ sub harvest_from_config
 	}
 	push @{$LOG->{messages}}, "Final State: $session_state";
 }
+
+
+sub create_user
+{
+	my ($id, $session_id) = @_;
+
+	die "attempted to create user without session id" unless $session_id;
+
+	output_status("Creating User $id for session $session_id");
+
+	my $harvest_config = user_harvest_config($id); 
+	my $user = {
+		'id' => $id,
+		'session_id' => $session_id,
+		'harvest_config_json' => $harvest_config,
+	};
+
+	db_write('user', $user);
+	$user = load_user($id, $session_id);
+	return $user;
+}
+
+sub create_session
+{
+	output_status('Creating Session');
+
+	my $session = {
+		start_time => DateTime->now->datetime,
+		status => 'new'
+	};
+
+	db_write('session', $session);
+	$session = load_latest_session(); #we've loaded from the database, so we have an ID now.
+
+	return $session;
+}
+
+
+##need to do date calculation
+sub session_expired
+{
+	my ($session) = @_;
+
+	my $interval = cfg('system','min_update_interval_hours') * 60 * 60;
+
+	return 1;
+
+}
+
+
+
+
 
 sub harvest_from_users_file
 {
@@ -348,7 +428,7 @@ sub create_by_users
 
 		copy_user_files($src_dir, $target_dir);
 
-		my $params = harvest_params($sn);
+		my $params = user_harvest_config($sn);
 		foreach my $f (qw/ friends followers /)
 		{
 			if (
@@ -396,7 +476,7 @@ sub initialise_spider_list
 	my %names_to_spider;
 	foreach my $screen_name (@harvest_names)
 	{
-		my $user_params = harvest_params($screen_name);
+		my $user_params = user_harvest_config($screen_name);
 
 		foreach my $f (qw/ followers friends /)
 		{
@@ -716,34 +796,40 @@ sub cfg
 sub ids_from_config
 {
 	my @user_groups = $CONFIG->GroupMembers('user');
-	my @users;
+	my $users = [];
 	foreach my $user_group (@user_groups)
 	{
 		my ($group, $user) = split(/\s+/, $user_group);
-		push @users, $user if ($user && valid_id($user)); #only numeric
+		push @{$users}, $user if ($user && valid_id($user)); #only numeric
 	}
-	return @users;
+	return $users;
 }
 
-sub harvest_params
+sub user_harvest_config
 {
-	my ($screen_name) = @_;
+	my ($user_id) = @_;
 
-	my $harvest_params = 
+	my $user_harvest_config = 
 	{
-		spider_friends => 0,
-		spider_followers => 0
+		tweets_from => 0,
+		tweets_mentioning => 0,
+		friends => 0,
+		followers => 0,
+		friends_friends => 0,
+		friends_followers => 0,
+		followers_friends => 0,
+		followers_followers => 0
 	};
 
-	foreach my $c (keys %{$harvest_params})
+	foreach my $c (keys %{$user_harvest_config})
 	{
-		if (cfg("user $screen_name", $c))
+		if (cfg("user $user_id", $c))
 		{
-			$harvest_params->{$c} = 1;
+			$user_harvest_config->{$c} = 1;
 		}
 	}
 
-	return $harvest_params;
+	return $user_harvest_config;
 }
 
 
@@ -948,20 +1034,30 @@ sub initialise_db
 			id INT NOT NULL AUTO_INCREMENT,
 			start_time DATETIME,
 			end_time DATETIME,
-			status char(10),
+			status CHAR(10),
 			PRIMARY KEY (id)
 		)',
 		'CREATE TABLE IF NOT EXISTS user (
 			session_id INT NOT NULL,
 			id INT NOT NULL,
-			json MEDIUMTEXT,
+			screen_name VARCHAR(255),
+			user_data_json MEDIUMTEXT,
+
+			user_data_state CHAR(10),
+			friends_state CHAR(10),
+			followers_state CHAR(10),
+			tweets_from_state CHAR(10),
+			tweets_mentioning_state CHAR(10),
+
+			harvest_config_json VARCHAR(255),
+
 			PRIMARY KEY (session_id, id),
 			FOREIGN KEY (session_id) REFERENCES session(id)
 		)',
 		'CREATE TABLE IF NOT EXISTS user_friends (
 			session_id INT NOT NULL,
 			user_id INT NOT NULL,
-			friend_id INT NOT NULL,
+			friends_id INT NOT NULL,
 			KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
 			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
@@ -969,7 +1065,7 @@ sub initialise_db
 		'CREATE TABLE IF NOT EXISTS user_followers (
 			session_id INT NOT NULL,
 			user_id INT NOT NULL,
-			follower_id INT NOT NULL,
+			followers_id INT NOT NULL,
 			KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
 			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
@@ -977,15 +1073,15 @@ sub initialise_db
 		'CREATE TABLE IF NOT EXISTS user_tweets_from (
 			session_id INT NOT NULL,
 			user_id INT NOT NULL,
-			json_tweets LONGTEXT,
+			tweets_json LONGTEXT,
 			PRIMARY KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
 			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
 		)',
-		'CREATE TABLE IF NOT EXISTS user_tweets_about (
+		'CREATE TABLE IF NOT EXISTS user_tweets_mentioning (
 			session_id INT NOT NULL,
 			user_id INT NOT NULL,
-			json_tweets LONGTEXT,
+			tweets_json LONGTEXT,
 			PRIMARY KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
 			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
@@ -1024,12 +1120,51 @@ sub db_write
 	foreach my $k (keys %{$hashref})
 	{
 		push @colnames, "`$k`";
-		push @values, $hashref->{$k};
+		push @values, val_for_db($k,$hashref->{$k});
 		push @questionmarks, '?';
 	}
 
 	my $sql = "INSERT INTO $table_name (" . join(', ',@colnames) . ') VALUES (' . join(', ',@questionmarks) . ')';
 	db_query($sql, @values);
+}
+
+sub val_for_db
+{
+	my ($fieldname, $value) = @_;
+
+	if ($fieldname =~ m/_json$/)
+	{
+		return '' unless ref $value; #should be a hashref or an arrayref
+		return encode_json $value;
+	}
+	return $value
+}
+
+#if it's a JSON field, decode it
+sub val_from_db
+{
+	my ($fieldname, $value) = @_;
+
+	if ($fieldname =~ m/_json$/)
+	{
+		return undef unless $value; #should do proper error handling
+		return decode_json $value;
+	}
+	return $value
+}
+
+#process values from database
+sub obj_from_db
+{
+	my ($hashref) = @_;
+
+	return undef unless $hashref;
+
+	foreach my $k (keys %{$hashref})
+	{
+		$hashref->{$k} = val_from_db($k, $hashref->{$k});
+	}
+	return $hashref;
 }
 
 sub db_update
@@ -1044,7 +1179,7 @@ sub db_update
 	{
 		next if $k eq 'id';
 		push @bits, "`$k`=?";
-		push @values, $hashref->{$k};
+		push @values, val_for_db($k,$hashref->{$k});
 	}
 
 	my $sql = "UPDATE $table_name SET " . join(', ', @bits) . " WHERE `id`=?";
@@ -1053,7 +1188,58 @@ sub db_update
 	db_query($sql, @values);
 }
 
-sub latest_session
+sub load_user_extra
+{
+	my ($extra, $user_id, $session_id) = @_;
+
+	if (
+		$extra eq 'friends'
+		|| $extra eq 'followers'
+	)
+	{
+		my $sql = 'SELECT ' . $extra . "_id FROM user_$extra WHERE session_id = $session_id AND user_id = $user_id";
+		my $sth = db_query($sql);
+
+		my $ids = [];
+		while (my $f_id = $sth->fetchrow_arrayref)
+		{
+			push @{$ids}, val_from_db($extra . '_id', $f_id->[0]);
+		}
+
+		return $ids;
+	}
+
+	if (
+		$extra eq 'tweets_from'
+		|| $extra eq 'tweets_mentioning'
+	)
+	{
+		my $sql = "SELECT tweets_json FROM user_$extra WHERE session_id = $session_id AND user_id = $user_id";
+		my $sth = db_query($sql);
+
+		my $tweets = $sth->fetchrow_arrayref;
+
+		return val_from_db('tweets_json', $tweets->[0]);
+	}
+
+	output_status("Request for unrecognised extra: $extra");
+	return undef;
+}
+
+
+sub load_user
+{
+	my ($user_id, $session_id) = @_;
+
+	my $sql = "SELECT * FROM user WHERE id = $user_id AND session_id = $session_id";
+
+	my $sth = db_query($sql);
+	my $user = $sth->fetchrow_hashref;
+
+	return obj_from_db($user);
+}
+
+sub load_latest_session
 {
 	my $sql = "SELECT * FROM session ORDER BY ID DESC limit 1";
 
@@ -1061,7 +1247,7 @@ sub latest_session
 
 	my $session = $sth->fetchrow_hashref;
 
-	return $session;
+	return obj_from_db($session);
 }
 
 
