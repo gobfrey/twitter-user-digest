@@ -69,14 +69,12 @@ exit;
 sub harvest_from_config
 {
 	my $session = load_latest_session();
+	my $ids_to_harvest = ids_from_config();
 
 	if (!$session)
 	{
 		$session = create_session();
 	}
-
-	use Data::Dumper;
-	print STDERR Dumper $session;
 
 	if ($session->{status} eq 'complete')
 	{
@@ -93,24 +91,127 @@ sub harvest_from_config
 		}
 	}
 
+	#create user entries in the table
 	if ($session->{status} eq 'new')
 	{
-		my $ids_to_harvest = ids_from_config();
-
 		foreach my $userid (@{$ids_to_harvest})
 		{
 			my $user = load_user($userid, $session->{id});
 			if (!$user)
 			{
-				$user = create_user($userid, $session->{id})
+				$user = create_user($userid, $session->{id});
+				$user->{harvest_root} = 1;
+				db_update('user', $user);
+			}
+		}
+		$session->{status} = 'harvesting';
+		db_update('session', $session);
+	}
+
+	my $harvest_statuses = {};
+	if ($session->{status} eq 'harvesting')
+	{
+		#download the user JSON -- a must for each user
+		$harvest_statuses->{download_user_data($session)}++; #count the number of complete or incomplete statuses
+		$harvest_statuses->{download_user_extras($session)}++;
+	}
+
+	if (
+		$session->{status} eq 'harvesting'
+		&& !$harvest_statuses->{incomplete}
+	)
+	{
+		#create user objects from friends and followers, basing the friends, followers, tweets from and tweets about requirements on the 'parent' user's harvest parameters
+		foreach my $userid (@{$ids_to_harvest})
+		{
+			my $user = load_user($userid, $session->{id});
+			if (!$user)
+			{
+				die "Couldn't load user $userid\n";
+			}
+			foreach my $f (qw/ friends followers /)
+			{
+				my $col = $f . '_id';
+				my $table = "user_$f";
+				my $sql = "SELECT $col FROM $table WHERE user_id = $userid AND session_id = " . $session->{id};
+				my $sth = db_query($sql);
+				while (my $row = $sth->fetchrow_arrayref)
+				{
+					my $child_user = load_user($row->[0], $session->{id});
+					if (!$child_user)
+					{
+						$child_user = create_user($row->[0], $session->{id});
+					}
+
+					#apply spider params from parent user
+					my $update = 0;
+					foreach my $k (qw/ friends follower tweets_from tweets_mentioning /)
+					{
+						my $conf_id = $f . '_' . $k; #e.g. friends_tweets_from or followers_friends
+						if (
+							$user->{harvest_config_json}->{$conf_id}
+							&& $child_user->{$k . '_state'} eq 'NO'
+						)
+						{
+							$child_user->{$k . '_state'} = 'TODO';
+							$update = 1;
+						}
+					}
+					db_update('user', $child_user) if $update;
+				}
 			}
 
-			use Data::Dumper;
-			print STDERR Dumper $user;
-
-
 		}
-	
+
+		$session->{status} = 'spidering';
+		db_update('session', $session);
+	}
+
+
+	my $spider_statuses = {};
+	if ($session->{status} eq 'spidering')
+	{
+		#download the user JSON -- a must for each user
+		$harvest_statuses->{download_user_data($session)}++; #count the number of complete or incomplete statuses
+		$harvest_statuses->{download_user_extras($session)}++;
+	}
+
+	if (
+		$session->{status} eq 'spidering'
+		&& !$spider_statuses->{'incomplete'}
+	)
+	{
+		#create terminal user records for all friends and followers
+		foreach my $f (qw/ friends followers /)
+		{
+			my $col = $f . '_id';
+			my $table = "user_$f";
+			my $sql = "SELECT $col FROM $table session_id = " . $session->{id};
+			my $sth = db_query($sql);
+			while (my $row = $sth->fetchrow_arrayref)
+			{
+				my $child_user = load_user($row->[0], $session->{id});
+				if (!$child_user)
+				{
+					$child_user = create_user($row->[0], $session->{id});
+				}
+			}
+		}
+		$session->{'status'} = 'terminating';
+		db_update('session', $session);
+	}
+
+	my $terminating_status = 'incomplete';
+	if ($session->{status} eq 'terminating')
+	{
+		#download the user JSON -- a must for each user
+		$terminating_status = download_user_data($session);
+	}
+
+	if ($terminating_status eq 'complete')
+	{
+		$session->{end_time} = DateTime->now->datetime;
+		$session->{status} = 'complete';
 	}
 
 
@@ -176,7 +277,6 @@ sub harvest_from_config
 	push @{$LOG->{messages}}, "Final State: $session_state";
 }
 
-
 sub create_user
 {
 	my ($id, $session_id) = @_;
@@ -189,8 +289,23 @@ sub create_user
 	my $user = {
 		'id' => $id,
 		'session_id' => $session_id,
+		'harvest_root' => 0,
 		'harvest_config_json' => $harvest_config,
+		'user_data_state' => 'TODO',
 	};
+
+	foreach my $c (qw/ followers friends tweets_from tweets_mentioning /)
+	{
+		my $col_name = $c . '_state';
+		if ($harvest_config->{$c})
+		{
+			$user->{$col_name} = 'TODO';
+		}
+		else
+		{
+			$user->{$col_name} = 'NO';
+		}
+	}
 
 	db_write('user', $user);
 	$user = load_user($id, $session_id);
@@ -243,108 +358,100 @@ sub harvest_from_users_file
 }
 
 
-#file type needs to be 'screen_name' or 'user_id'
-sub get_basic_user_data
+#gets JSON data for all users in the current session that don't have it yet
+sub download_user_data
 {
-	my ($session_dir, $users_file, $file_type) = @_;
+	my ($session) = @_;
 
-	my @user_refs = file_to_array($users_file);
-
-	while (1)
+	while (1) #exit points on returns below
 	{
-		last if (!scalar @user_refs); #we've processed them all.
+		my $sql = 'SELECT id FROM user WHERE session_id=' . $session->{id};
+		$sql .= ' AND user_data_state =\'TODO\' LIMIT 100'; 
 
-		my @one_hundred;
-		#there's a max of 100 IDs that can be passed to twitter
-		#exit when 100 refs or we run out of refs
-		while (
-			scalar @one_hundred < 100
-			&& scalar @user_refs
-		)
+		my $sth = db_query($sql);
+		my @ids;
+		while (my $row = $sth->fetchrow_arrayref)
 		{
-			my $id = shift @user_refs;
-
-			next if -e ("$session_dir/by_$file_type/$id"); #we've already harvested this one.
-			push @one_hundred, $id;
+			push @ids, $row->[0];
 		}
 
-		if (scalar @one_hundred)
+		#if we have no IDS, then all in the database are good
+		if (!scalar @ids)
 		{
-			my $status = userlist_to_directories($session_dir, \@one_hundred, $file_type);
-			
-			return 'incomplete' if $status != 200; #problem with the API, exit here
+			#####EXIT POINT
+			return 'complete';
 		}
+
+		my ($status, $users) = query_twitter('lookup_users', {'user_id' => \@ids, include_entities => 1});
+
+		#####EXIT POINT
+		return 'incomplete' unless $status == 200; #probably out of API
+
+		foreach my $user_data (@{$users})
+		{
+			my $user_obj = load_user($user_data->{'id'}, $session->{id});
+			die "Unable to load user " . $user_data->{'user_id'} . "\n" unless $user_obj;
+
+			$user_obj->{'screen_name'} = $user_data->{'screen_name'};
+			$user_obj->{'user_data_state'} = 'OK';
+			$user_obj->{'user_data_json'} = $user_data;
+
+			db_update('user',$user_obj);
+
+			$LOG->{harvest_count}->{user_data}++;
+		}
+
+		#####EXIT POINT
+		return 'incomplete' if $status != 200; #problem with the API, exit here
 	}
-	return 'complete';
 }
 
 
-
-
-#for every entry in the user file that has a directory, enrich if necessary
-#to be run after user data has been downloaded
-sub enrich_in_session_dir
+#for every user in the current session, download the bits that the user needs
+sub download_user_extras
 {
-	my ($session_dir, $bits_to_harvest, $users_file, $file_type) = @_;
-
-	my @user_refs = file_to_array($users_file);
-	my $json = JSON->new->allow_nonref;
+	my ($session) = @_;
 
 	my $complete = 1;
-	ENRICH_TYPE: foreach my $enrich_type (keys %{$bits_to_harvest})
+	ENRICH_TYPE: foreach my $enrich_type (qw/ friends followers tweets_from tweets_mentioning /)
 	{
-		next unless $bits_to_harvest->{$enrich_type};
-		USER: foreach my $user (@user_refs)
+		#this leads to more SQL, but it makes sense to do it this way as we want to do it by
+		#twitter API call
+		my $sql = 'SELECT id FROM user WHERE user_data_state = \'OK\' AND session_id = ' . $session->{id};
+		my $sth = db_query($sql);
+		USER: while (my $row = $sth->fetchrow_arrayref)
 		{
-			my $user_dir = "$session_dir/by_$file_type/$user";
-			my $filename = "$user_dir/$enrich_type.json";
-			if (!-d $user_dir)
-			{
-				#there's no directory, the user info hasn't been downloaded yet
-				$complete = 0;
-				next;
-			}
-			next if -e $filename; #we've already done this
+			my $user = load_user($row->[0], $session->{id});
+			next if $user->{$enrich_type . '_state'} ne 'TODO';
 
-			my $user_obj = json_file($user_dir . '/userdata.json');
-			if (!$user_obj)
+			#if the user is private, we'll get no data
+			if (
+				exists $user->{user_data_json}->{protected}
+				&& $user->{user_data_json}->{protected}
+			)
 			{
-				$complete = 0;
-				next;
-			}
-
-			my $username = $user_obj->{screen_name};
-
-			if ($user_obj->{protected})
-			{
-				output_status("$user is protected, we'll get no rich data");
+				$user->{$enrich_type . '_state'} = 'PRIVATE';
+				db_update('user', $user);
 				next USER;
 			}
 
-			output_status("Enriching $enrich_type for $username");
+			my $screen_name = $user->{screen_name};
+
+			output_status("Enriching $enrich_type for $screen_name");
 
 			my ($status, $data);
 			if (
 				($enrich_type eq 'frields' || $enrich_type eq 'followers')
-				&& $user_obj->{$enrich_type . '_count'} > (15 * 5000) #the max accessible in a single window
+				&& $user->{user_data_json}->{$enrich_type . '_count'} > (15 * 5000) #the max accessible in a single window
 			)
 			{
-				$data = [];
-				$status = 200; #we'll pretend this is OK, but really it's unachievable
-			}
-			else
-			{
-				($status, $data) = get_user_data($username, $enrich_type);
+				$user->{$enrich_type . '_state'} = 'TOOMANY';
+				next USER;
 			}
 
-			if ($status == 200) #all OK
-			{
-				$LOG->{harvest_count}->{$enrich_type}++;
-				my $json_data = $json->pretty->encode($data);
+			($status, $data) = get_user_data($screen_name, $enrich_type);
 
-				write_to_file($filename, $json_data);
-			}
-			elsif ($status == 429) # Out of API
+			if ($status == 429) # Out of API
 			{
 				output_status("Out of API for $enrich_type");
 				$complete = 0;
@@ -355,11 +462,46 @@ sub enrich_in_session_dir
 				print STDERR "$status: terminating";
 				last ENRICH_TYPE; #exit just to be safe
 			}
-			else #write empty data to the file.  It's probably a permissions error
+			elsif ($status != 200) #It's probably a permissions error
 			{
-				output_status("HTTP STATUS $status for $enrich_type for $username.  Writing Empty Datafile.");
-				write_to_file($filename, $json->pretty->encode([]));
+				output_status("HTTP STATUS $status for $enrich_type for $screen_name.");
+				$user->{$enrich_type . '_state'} = "ERR$status";
+				next USER;
 			}	
+
+			#status must be 200.  All OK
+			$LOG->{harvest_count}->{$enrich_type}++;
+
+			my $row = {
+				'user_id' => $user->{id},
+				'session_id' => $session->{id}
+			};
+			my $table_name = 'user_' . $enrich_type;
+
+			if
+			(
+				$enrich_type eq 'tweets_from'
+			 	|| $enrich_type eq 'tweets_mentioning'
+			)
+			{
+				$row->{tweets_json} = $data;
+				db_write($table_name, $row);
+			}
+			elsif
+			(
+				$enrich_type eq 'followers'
+				|| $enrich_type eq 'friends'
+			)
+			{
+				foreach my $userid (@{$data})
+				{
+print STDERR "$userid\n";
+					$row->{$enrich_type . '_id'} = $userid;
+					db_write($table_name, $row);
+				}
+			}
+			$user->{$enrich_type . '_state'} = 'OK';
+			db_update('user', $user);
 		}
 	}
 
@@ -1039,9 +1181,10 @@ sub initialise_db
 		)',
 		'CREATE TABLE IF NOT EXISTS user (
 			session_id INT NOT NULL,
-			id INT NOT NULL,
+			id BIGINT NOT NULL,
+			harvest_root TINYINT,
 			screen_name VARCHAR(255),
-			user_data_json MEDIUMTEXT,
+			user_data_json LONGTEXT,
 
 			user_data_state CHAR(10),
 			friends_state CHAR(10),
@@ -1052,27 +1195,35 @@ sub initialise_db
 			harvest_config_json VARCHAR(255),
 
 			PRIMARY KEY (session_id, id),
+			KEY (session_id, harvest_root),
+			KEY (session_id, user_data_state),
+			KEY (session_id, friends_state),
+			KEY (session_id, followers_state),
+			KEY (session_id, tweets_from_state),
+			KEY (session_id, tweets_mentioning_state),
 			FOREIGN KEY (session_id) REFERENCES session(id)
 		)',
 		'CREATE TABLE IF NOT EXISTS user_friends (
 			session_id INT NOT NULL,
-			user_id INT NOT NULL,
-			friends_id INT NOT NULL,
+			user_id BIGINT NOT NULL,
+			friends_id BIGINT NOT NULL,
 			KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
-			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id),
+			PRIMARY KEY (session_id, user_id, friends_id)
 		)',
 		'CREATE TABLE IF NOT EXISTS user_followers (
 			session_id INT NOT NULL,
-			user_id INT NOT NULL,
-			followers_id INT NOT NULL,
+			user_id BIGINT NOT NULL,
+			followers_id BIGINT NOT NULL,
 			KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
-			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id)
+			FOREIGN KEY (session_id, user_id) REFERENCES user(session_id, id),
+			PRIMARY KEY (session_id, user_id, followers_id)
 		)',
 		'CREATE TABLE IF NOT EXISTS user_tweets_from (
 			session_id INT NOT NULL,
-			user_id INT NOT NULL,
+			user_id BIGINT NOT NULL,
 			tweets_json LONGTEXT,
 			PRIMARY KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
@@ -1080,7 +1231,7 @@ sub initialise_db
 		)',
 		'CREATE TABLE IF NOT EXISTS user_tweets_mentioning (
 			session_id INT NOT NULL,
-			user_id INT NOT NULL,
+			user_id BIGINT NOT NULL,
 			tweets_json LONGTEXT,
 			PRIMARY KEY (session_id, user_id),
 			FOREIGN KEY (session_id) REFERENCES session(id),
@@ -1109,6 +1260,7 @@ sub db_query
 	return $sth;
 }
 
+#adds a new row to the database
 sub db_write
 {
 	my ($table_name, $hashref) = @_;
@@ -1172,18 +1324,28 @@ sub db_update
 	my ($table_name, $hashref) = @_;
 
 	die ("Cannot update with an id set") unless $hashref->{id};
+	if ($table_name eq 'user')
+	{
+		die "Cannot update a user without a session_id" unless $hashref->{session_id};
+	}
 
 	my @bits;
 	my @values;
 	foreach my $k (keys %{$hashref})
 	{
 		next if $k eq 'id';
+		next if $k eq 'session_id';
 		push @bits, "`$k`=?";
 		push @values, val_for_db($k,$hashref->{$k});
 	}
 
 	my $sql = "UPDATE $table_name SET " . join(', ', @bits) . " WHERE `id`=?";
 	push @values, $hashref->{id};
+	if ($hashref->{session_id})
+	{
+		$sql .= ' AND `session_id`=?';
+		push @values, $hashref->{session_id};
+	}
 
 	db_query($sql, @values);
 }
