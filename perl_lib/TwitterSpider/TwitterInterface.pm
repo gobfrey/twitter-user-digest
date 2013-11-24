@@ -51,7 +51,7 @@ sub refresh_api_limits
 {
 	my ($self) = @_;
 
-	my $limits = $self->query_twitter('rate_limit_status');
+	my $limits = $self->query('rate_limit_status');
 
 	my $api_log_string = 'Last API Check: ';
 	foreach my $api (values %{$self->{api_map}})
@@ -68,7 +68,7 @@ sub refresh_api_limits
 	$self->{spider}->output_status($api_log_string);
 }
 
-sub query_twitter
+sub query
 {
 	my ($self, $method, $args) = @_;
 
@@ -130,6 +130,49 @@ sub connect_to_twitter
 	}
 }
 
+sub get_friends_or_followers
+{
+	#$f set to either friends or followers
+	my ($self, $screen_name, $f) = @_;
+	my $spider = $self->{spider};
+
+	my $user_ids = [];
+	my $r = undef; #to hold one page of results
+	my $status;
+
+	while (1)
+	{
+		$spider->output_status("Retrieving $f for $screen_name...");
+
+		my $params = {
+			screen_name => $screen_name,
+			include_user_entities => 1,
+		};
+		$params->{cursor} = $r->{next_cursor} if $r;
+
+		my $method = $f .'_ids';
+
+		($status, $r) = $self->query($method, $params);
+		return ($status, undef) unless $status == 200; #errors (and running out of API) pass upwards
+
+		$spider->output_status(scalar @{$r->{ids}} . " $f IDs returned.  Cursor is " . $r->{next_cursor});
+
+		push @{$user_ids}, @{$r->{ids}};
+		last unless $r->{next_cursor}; #will be 0 on the last page
+	}
+	return (200, $user_ids);
+}
+
+
+sub tweet_search
+{
+	my ($self, $q) = @_;
+	my $spider = $self->{spider};
+
+	$spider->output_status("Tweet Search for '$q'...");
+	my ($status, $data) = $self->query('search', { q => $q, count => 100, include_entities => 1 });
+	return ($status, ($data->{statuses}?$data->{statuses}:undef));
+}
 
 
 

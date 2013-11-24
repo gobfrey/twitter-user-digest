@@ -74,6 +74,16 @@ if ($session->{status} eq 'new')
 	$session->commit($ts);
 }
 
+my $harvest_statuses = {};
+if ($session->value('status') eq 'harvesting')
+{
+
+	#download the user JSON -- a must for each user
+	$harvest_statuses->{$session->download_user_data($ts)}++; #count the number of complete or incomplete statuses
+	$harvest_statuses->{$session->download_user_extras($ts)}++;
+}
+
+
 exit;
 
 

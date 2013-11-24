@@ -46,46 +46,119 @@ sub create
 
 sub load_extra
 {
-	my ($self, $spider, $extra) = @_;
+	my ($self, $spider, $extra_type) = @_;
+
 	my $db = $spider->db;
+	my $user_id = $self->id;
 	my $session_id = $self->value('session_id');
-	my $id = $self->value('id');
+	my $table_name = 'user_' . $extra_type;
+	my $data_col = '';
 
-	if (
-		$extra eq 'friends'
-		|| $extra eq 'followers'
+	if(
+		$extra_type eq 'tweets_from'
+		|| $extra_type eq 'tweets_mentioning'
 	)
 	{
-		my $sql = 'SELECT ' . $extra . "_id FROM user_$extra WHERE session_id = $session_id AND user_id = $id";
-		my $sth = $db->query($sql);
+		$data_col = 'tweets_json';
+	}
+	elsif
+	(
+		$extra_type eq 'followers'
+		|| $extra_type eq 'friends'
+	)
+	{
+		$data_col = $extra_type . '_id';
+	}
+	else
+	{
+		die "User extra $extra_type not recognised\n";
+	}
+	my $sql = "SELECT $data_col FROM $table_name WHERE session_id = $session_id AND user_id = $user_id";
 
-		my $ids = [];
-		while (my $f_id = $sth->fetchrow_arrayref)
+	my $sth = $db->query($sql);
+	return undef unless $sth->rows;
+
+	#one cell of data;
+	if ($data_col eq 'tweets_json')
+	{
+		return $db->val_from_db($data_col,$sth->fetchrow_arrayref->[0]);
+	}
+	#otherwise multiple cells of data
+	my $data;
+	while (my $row = $sth->fetchrow_arrayref)
+	{
+		push @{$data}, $db->val_from_db($data_col, $row->[0]);
+	}
+	return $data;
+}
+
+#get twitter data for this user
+sub download_extra
+{
+	my ($self, $spider, $extra_type) = @_;
+	my $twitter = $spider->twitter;
+	my $screen_name = $self->value('screen_name');
+
+	$spider->output_status("Retrieving $extra_type User Information for $screen_name...");
+
+	my ($status, $data);
+
+	if ($extra_type eq 'friends' || $extra_type eq 'followers')
+	{
+		($status, $data) = $twitter->get_friends_or_followers($screen_name, $extra_type);
+	}
+	elsif ($extra_type eq 'tweets_from')
+	{
+		($status, $data) = $twitter->tweet_search("from:$screen_name");
+	}
+	elsif ($extra_type eq 'tweets_mentioning')
+	{
+		($status, $data) = $twitter->tweet_search("\@$screen_name");
+	}
+	else
+	{
+		die "Unrecognised Data Class $extra_type\n";
+	}
+
+	return ($status, $data);
+}
+
+sub write_extra
+{
+	my ($self, $spider, $extra_type, $data) = @_;
+	my $db = $spider->db;
+
+	my $row = {
+		'user_id' => $self->id,
+		'session_id' => $self->value('session_id')
+	};
+
+	my $table_name = 'user_' . $extra_type;
+
+	if
+	(
+		$extra_type eq 'tweets_from'
+		|| $extra_type eq 'tweets_mentioning'
+	)
+	{
+		$row->{tweets_json} = $data;
+		$db->write($table_name, $row);
+	}
+	elsif
+	(
+		$extra_type eq 'followers'
+		|| $extra_type eq 'friends'
+	)
+	{
+		foreach my $userid (@{$data})
 		{
-			push @{$ids}, $self->val_from_db($extra . '_id', $f_id->[0]);
+			$row->{$extra_type . '_id'} = $userid;
+			$db->write($table_name, $row, IGNORE_DUPLICATES => 1);
 		}
-
-		return $ids;
 	}
-
-	if (
-		$extra eq 'tweets_from'
-		|| $extra eq 'tweets_mentioning'
-	)
-	{
-		my $sql = "SELECT tweets_json FROM user_$extra WHERE session_id = $session_id AND user_id = $id";
-		my $sth = $self->db_query($sql);
-
-		my $tweets = $sth->fetchrow_arrayref;
-
-		return $self->val_from_db('tweets_json', $tweets->[0]);
-	}
-
-	$spider->output_status("Request for unrecognised extra: $extra");
-	return undef;
-
 
 }
+
 
 #non-oo call
 sub mysql_tabledef

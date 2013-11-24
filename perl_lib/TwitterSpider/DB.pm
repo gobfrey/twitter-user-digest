@@ -77,7 +77,7 @@ sub query
 #adds a new row to the database
 sub write
 {
-	my ($self, $table_name, $hashref) = @_;
+	my ($self, $table_name, $hashref, %opts) = @_;
 
 	my @colnames;
 	my @values;
@@ -91,6 +91,12 @@ sub write
 	}
 
 	my $sql = "INSERT INTO $table_name (" . join(', ',@colnames) . ') VALUES (' . join(', ',@questionmarks) . ')';
+	if ($opts{IGNORE_DUPLICATES})
+	{
+		my $c = $colnames[0];
+		$sql .= " ON DUPLICATE KEY UPDATE $c=$c";
+	}
+
 	$self->query($sql, @values);
 }
 

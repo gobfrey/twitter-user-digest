@@ -18,10 +18,21 @@ sub new
 	my $config = TwitterSpider::Config->new($config_file);
 	$self->{config} = $config;
 
+	#these two must be done after the config is loaded
 	$self->{db} = TwitterSpider::DB->new($self);
+	$self->{twitter} = TwitterSpider::TwitterInterface->new($self);
+
 	$self->{verbose} = $verbose;
 
+
 	return $self;
+}
+
+sub twitter
+{
+	my ($self) = @_;
+
+	return $self->{twitter};
 }
 
 sub db

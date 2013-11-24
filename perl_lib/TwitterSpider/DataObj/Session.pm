@@ -89,6 +89,134 @@ sub user
 	return TwitterSpider::DataObj::User->load($spider, $id_bits);
 }
 
+#gets JSON data for all users in the current session that don't have it yet
+sub download_user_data
+{
+	my ($self, $spider) = @_;
+	my $db = $spider->db;
+	my $twitter = $spider->twitter;
+
+	while (1) #exit points on returns below
+	{
+		my $sql = 'SELECT id FROM user WHERE session_id=' . $self->id;
+		$sql .= ' AND user_data_state =\'TODO\' LIMIT 100'; 
+
+		my $sth = $db->query($sql);
+		my @ids;
+		while (my $row = $sth->fetchrow_arrayref)
+		{
+			push @ids, $row->[0];
+		}
+
+		#if we have no IDS, then all in the database are good
+		if (!scalar @ids)
+		{
+			#####EXIT POINT
+			return 'complete';
+		}
+
+		my ($status, $users) = $twitter->query('lookup_users', {'user_id' => \@ids, include_entities => 1});
+
+		#####EXIT POINT
+		return 'incomplete' unless $status == 200; #probably out of API
+
+		foreach my $user_data (@{$users})
+		{
+			my $user_obj = $self->user($spider, $user_data->{'id'});
+			die "Unable to load user " . $user_data->{'user_id'} . "\n" unless $user_obj;
+
+			$user_obj->set_value('screen_name', $user_data->{'screen_name'});
+			$user_obj->set_value('user_data_state',  'OK');
+			$user_obj->set_value('user_data_json', $user_data);
+
+			$user_obj->commit($spider);
+		}
+
+		#####EXIT POINT
+		return 'incomplete' if $status != 200; #problem with the API, exit here
+	}
+}
+
+#for every user in the current session, download the bits that the user needs
+sub download_user_extras
+{
+	my ($self, $spider) = @_;
+	my $db = $spider->db;
+	my $twitter = $spider->twitter;
+
+	my $complete = 1;
+	EXTRA_TYPE: foreach my $extra_type (qw/ friends followers tweets_from tweets_mentioning /)
+	{
+		#this leads to more SQL, but it makes sense to do it this way as we want to do it by
+		#twitter API call
+		my $sql = 'SELECT id FROM user WHERE user_data_state = \'OK\' AND session_id = ' . $self->id;
+		my $sth = $db->query($sql);
+		USER: while (my $row = $sth->fetchrow_arrayref)
+		{
+			my $user = $self->user($spider,$row->[0]);
+			next if $user->value($extra_type . '_state') ne 'TODO';
+
+			#if the user is private, we'll get no data
+			my $user_data = $user->value('user_data_json');
+			if (
+				exists $user_data->{protected}
+				&& $user_data->{protected}
+			)
+			{
+				$user->set_value($extra_type . '_state', 'PRIVATE');
+				$user->commit($spider);
+				next USER;
+			}
+
+			my $screen_name = $user->value('screen_name');
+
+			$spider->output_status("Enriching $extra_type for $screen_name");
+
+			my ($status, $data);
+			if (
+				($extra_type eq 'frields' || $extra_type eq 'followers')
+				&& $user_data->{$extra_type . '_count'} > (15 * 5000) #the max accessible in a single window
+			)
+			{
+				$user->set_value($extra_type . '_state', 'TOOMANY');
+				$user->commit($spider);
+				next USER;
+			}
+
+			($status, $data) = $user->download_extra($spider, $extra_type);
+
+			if ($status == 429) # Out of API
+			{
+				$spider->output_status("Out of API for $extra_type");
+				$complete = 0;
+				next EXTRA_TYPE; #we're probably out of API for this type
+			}
+			elsif ($status >= 500 && $status < 600)
+			{
+				print STDERR "$status: terminating";
+				last EXTRA_TYPE; #exit just to be safe
+			}
+			elsif ($status != 200) #It's probably a permissions error
+			{
+				$spider->output_status("HTTP STATUS $status for $extra_type for $screen_name.");
+				$user->set_value($extra_type . '_state', "ERR$status");
+				next USER;
+			}	
+
+			#status must be 200.  All OK
+			$user->write_extra($spider, $extra_type, $data);
+			$user->set_value($extra_type . '_state', 'OK');
+			$user->commit($spider);
+		}
+	}
+
+	if ($complete)
+	{
+		return 'complete';
+	}
+	return 'incomplete';
+}
+
 sub create_user
 {
 	my ($self, $spider, $user_id) = @_;
