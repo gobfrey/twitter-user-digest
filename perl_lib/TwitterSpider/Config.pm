@@ -65,14 +65,18 @@ sub user_harvest_config
 
 	my $user_harvest_config = 
 	{
+		followers => 0,
+		followers_followers => 0,
+		followers_friends => 0,
+		followers_tweets_from => 0,
+		followers_tweets_mentioning => 0,
+		friends => 0,
+		friends_followers => 0,
+		friends_friends => 0,
+		friends_tweets_from => 0,
+		friends_tweets_mentioning => 0,
 		tweets_from => 0,
 		tweets_mentioning => 0,
-		friends => 0,
-		followers => 0,
-		friends_friends => 0,
-		friends_followers => 0,
-		followers_friends => 0,
-		followers_followers => 0
 	};
 
 	foreach my $c (keys %{$user_harvest_config})

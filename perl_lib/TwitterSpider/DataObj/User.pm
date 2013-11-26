@@ -7,6 +7,27 @@ use strict;
 use warnings;
 
 
+sub harvest_option
+{
+	my ($self, $opt) = @_;
+
+	my $h_c = $self->value('harvest_config_json');
+	return undef unless $h_c;
+
+	if (exists $h_c->{$opt})
+	{
+		return $h_c->{$opt};
+	}
+	return undef;
+}
+
+sub session
+{
+	my ($self, $spider) = @_;
+
+	return TwitterSpider::DataObj::Session->load($spider, { id => $self->value('session_id')});
+}
+
 sub create
 {
 	my ($class, $spider, $id, $session) = @_;
@@ -42,6 +63,44 @@ sub create
 
 	$user = TwitterSpider::DataObj::User->load($spider, {id => $id, session_id => $session_id});
 	return $user;
+}
+
+#create user records in the current session for followers
+#and friends
+sub create_children
+{
+	my ($self, $spider) = @_;
+	my $session = $self->session($spider);
+
+	foreach my $child_type (qw/ friends followers /)
+	{
+		my $child_ids = $self->load_extra($spider, $child_type);
+		foreach my $child_id (@{$child_ids})
+		{
+			my $child = $session->user($spider, $child_id);
+			if (!$child)
+			{
+				$child = $session->create_user($spider, $child_id);
+			}
+
+			#apply parameters from parent config
+			my $update = 0;
+
+			foreach my $c (qw/ friends followers tweets_from tweets_mentioning /)
+			{
+				if (
+					$self->harvest_option($child_type . '_' . $c)
+					&& $child->value($c . '_state') eq 'NO'
+				)
+				{
+					$child->set_value($c . '_state', 'TODO');
+					$update = 1;
+				}
+
+			}
+			$child->commit($spider) if $update;
+		}
+	}
 }
 
 sub load_extra
@@ -150,11 +209,13 @@ sub write_extra
 		|| $extra_type eq 'friends'
 	)
 	{
-		foreach my $userid (@{$data})
-		{
-			$row->{$extra_type . '_id'} = $userid;
-			$db->write($table_name, $row, IGNORE_DUPLICATES => 1);
-		}
+		$db->write_multiple_f($extra_type, $self->value('session_id'), $self->id, $data);
+
+#		foreach my $userid (@{$data})
+#		{
+#			$row->{$extra_type . '_id'} = $userid;
+#			$db->write($table_name, $row, IGNORE_DUPLICATES => 1);
+#		}
 	}
 
 }
@@ -177,7 +238,7 @@ sub mysql_tabledef
 			tweets_from_state CHAR(10),
 			tweets_mentioning_state CHAR(10),
 
-			harvest_config_json VARCHAR(255),
+			harvest_config_json MEDIUMTEXT,
 
 			PRIMARY KEY (session_id, id),
 			KEY (session_id, harvest_root),

@@ -63,7 +63,7 @@ sub query
 	$self->connect unless $self->{dbi}; 
 	my $dbi = $self->{dbi};
 
-	$spider->output_status("Running $sql");
+#	$spider->output_status("Running $sql");
 
 	my $sth = $dbi->prepare($sql)
 		or die "Couldn't prepare statement: " . $dbi->errstr;
@@ -74,10 +74,43 @@ sub query
 	return $sth;
 }
 
+#for use with user_friends and user_followers
+# f_type is 'friends' or 'followers'
+sub write_multiple_f
+{
+	my ($self, $f_type, $session_id, $user_id, $values) = @_;
+
+	return unless scalar @{$values};
+
+	$self->connect unless $self->{dbi}; 
+	my $dbi = $self->{dbi};
+
+	my $col_name = $f_type . '_id';
+	my $table_name = 'user_' . $f_type;
+
+	my $sql = "
+		INSERT INTO
+			$table_name (`session_id`,`user_id`,`$col_name`)
+		VALUES
+			($session_id, $user_id, ?)
+		ON DUPLICATE KEY UPDATE `user_id`=`user_id`";
+
+
+	$dbi->{AutoCommit} = 0;
+	my $sth = $dbi->prepare_cached( $sql )
+			or die "Couldn't prepare statement: " . $dbi->errstr;
+	$sth->execute( $_ ) for @{$values};
+	$sth->finish;
+	$dbi->{AutoCommit} = 1;
+}
+
 #adds a new row to the database
 sub write
 {
 	my ($self, $table_name, $hashref, %opts) = @_;
+
+	$self->connect unless $self->{dbi}; 
+	my $dbi = $self->{dbi};
 
 	my @colnames;
 	my @values;

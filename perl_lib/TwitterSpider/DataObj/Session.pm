@@ -217,6 +217,32 @@ sub download_user_extras
 	return 'incomplete';
 }
 
+#parents are unimportant here because we will never download
+#extra data into these.
+sub create_spider_children
+{
+	my ($self, $spider) = @_;
+
+	foreach my $f (qw/ friends followers /)
+	{
+		my $col = $f . '_id';
+		my $table = "user_$f";
+		my $sql = "SELECT $col FROM $table session_id = " . $self->id;
+		my $sth = db_query($sql);
+		while (my $row = $sth->fetchrow_arrayref)
+		{
+			my $child_user = $self->user($spider,$row->[0]);
+			if (!$child_user)
+			{
+				$child_user = $self->create_user($spider, $row->[0]);
+			}
+		}
+	}
+
+
+
+}
+
 sub create_user
 {
 	my ($self, $spider, $user_id) = @_;
