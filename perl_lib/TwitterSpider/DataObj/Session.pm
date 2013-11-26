@@ -70,7 +70,7 @@ sub mysql_tabledef
 			id INT NOT NULL AUTO_INCREMENT,
 			start_time DATETIME,
 			end_time DATETIME,
-			status CHAR(10),
+			status CHAR(20),
 			PRIMARY KEY (id)
 		)'
 	];
@@ -120,17 +120,29 @@ sub download_user_data
 		#####EXIT POINT
 		return 'incomplete' unless $status == 200; #probably out of API
 
+		$sql = 'UPDATE user SET `screen_name`=?, `user_data_state`=?, `user_data_json`=? WHERE `id`=? AND `session_id`=' . $self->id;
+
+		my $data = [];
+
 		foreach my $user_data (@{$users})
 		{
-			my $user_obj = $self->user($spider, $user_data->{'id'});
-			die "Unable to load user " . $user_data->{'user_id'} . "\n" unless $user_obj;
-
-			$user_obj->set_value('screen_name', $user_data->{'screen_name'});
-			$user_obj->set_value('user_data_state',  'OK');
-			$user_obj->set_value('user_data_json', $user_data);
-
-			$user_obj->commit($spider);
+			push @{$data}, [
+				$db->val_for_db('screen_name',$user_data->{'screen_name'}),
+				$db->val_for_db('user_data_state', 'OK'),
+				$db->val_for_db('user_data_json', $user_data),
+				$user_data->{'id'}
+			];
+#			my $user_obj = $self->user($spider, $user_data->{'id'});
+#			die "Unable to load user " . $user_data->{'user_id'} . "\n" unless $user_obj;
+#
+#			$user_obj->set_value('screen_name', $user_data->{'screen_name'});
+#			$user_obj->set_value('user_data_state',  'OK');
+#			$user_obj->set_value('user_data_json', $user_data);
+#
+#			$user_obj->commit($spider);
 		}
+
+		$db->query_multiple($sql, $data);
 
 		#####EXIT POINT
 		return 'incomplete' if $status != 200; #problem with the API, exit here
@@ -227,8 +239,8 @@ sub create_spider_children
 	{
 		my $col = $f . '_id';
 		my $table = "user_$f";
-		my $sql = "SELECT $col FROM $table session_id = " . $self->id;
-		my $sth = db_query($sql);
+		my $sql = "SELECT $col FROM $table WHERE session_id = " . $self->id;
+		my $sth = $spider->db->query($sql);
 		while (my $row = $sth->fetchrow_arrayref)
 		{
 			my $child_user = $self->user($spider,$row->[0]);

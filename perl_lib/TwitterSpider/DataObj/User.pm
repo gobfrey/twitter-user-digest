@@ -230,7 +230,7 @@ sub mysql_tabledef
 			id BIGINT NOT NULL,
 			harvest_root TINYINT,
 			screen_name VARCHAR(255),
-			user_data_json LONGTEXT,
+			user_data_json MEDIUMBLOB,
 
 			user_data_state CHAR(10),
 			friends_state CHAR(10),

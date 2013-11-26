@@ -67,7 +67,7 @@ sub cfg
 
 sub connect_to_twitter
 {
-	my $key_file = cfg('system', 'api_keys_file');
+	my $key_file = cfg('system', 'secrets');
 	my $keys = Config::IniFiles->new(-file => $key_file);
 
 	my %nt_args = (

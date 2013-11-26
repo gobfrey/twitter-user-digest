@@ -104,6 +104,20 @@ sub write_multiple_f
 	$dbi->{AutoCommit} = 1;
 }
 
+sub query_multiple
+{
+	my ($self, $sql, $values_arrays) = @_;
+	my $dbi = $self->{dbi};
+	
+	$dbi->{AutoCommit} = 0;
+	my $sth = $dbi->prepare_cached( $sql )
+			or die "Couldn't prepare statement: " . $dbi->errstr;
+	$sth->execute( @{$_} ) for @{$values_arrays};
+	$sth->finish;
+	$dbi->{AutoCommit} = 1;
+}
+
+
 #adds a new row to the database
 sub write
 {

@@ -37,8 +37,11 @@ $ts->output_status('Starting Process');
 my $session = $ts->latest_session;
 if (!$session)
 {
+	$ts->output_status('Creating new Session');
 	$session = $ts->create_new_session;
 }
+
+$ts->output_status('Session has status: ' . $session->value('status'));
 
 my $ids_to_harvest = $ts->config->users_to_harvest;
 
@@ -60,6 +63,7 @@ if ($session->value('status') eq 'complete')
 #create user entries in the table
 if ($session->{status} eq 'new')
 {
+	$ts->output_status('Initialising Session');
 	foreach my $userid (@{$ids_to_harvest})
 	{
 		my $user = $session->user($ts, $userid);
@@ -77,6 +81,7 @@ if ($session->{status} eq 'new')
 my $harvest_statuses = {};
 if ($session->value('status') eq 'harvesting')
 {
+	$ts->output_status('Downloading Data for Root Users');
 	#download the user JSON -- a must for each user
 	$harvest_statuses->{$session->download_user_data($ts)}++; #count the number of complete or incomplete statuses
 	$harvest_statuses->{$session->download_user_extras($ts)}++;
@@ -87,6 +92,7 @@ if (
 	&& !$harvest_statuses->{incomplete}
 )
 {
+	$ts->output_status('Harvesting Successfully Completed');
 	#create user objects from friends and followers, basing the friends, followers, tweets from and tweets about requirements on the 'parent' user's harvest parameters
 	foreach my $userid (@{$ids_to_harvest})
 	{
@@ -105,6 +111,7 @@ if (
 my $spider_statuses = {};
 if ($session->{status} eq 'spidering')
 {
+	$ts->output_status('Downloading Frinds and Followers Data');
 	#download the user JSON -- a must for each user
 	$spider_statuses->{$session->download_user_data($ts)}++; #count the number of complete or incomplete statuses
 	$spider_statuses->{$session->download_user_extras($ts)}++;
@@ -115,6 +122,7 @@ if (
 	&& !$spider_statuses->{'incomplete'}
 )
 {
+	$ts->output_status('Downloading Frinds and Followers Data Complete');
 	#create terminal user records for all friends and followers
 	$session->create_spider_children($ts);
 
@@ -125,15 +133,20 @@ if (
 my $terminating_status = 'incomplete';
 if ($session->{status} eq 'terminating')
 {
+	$ts->output_status('Downloading final users data');
 	#download the user JSON -- a must for each user
-	$terminating_status = download_user_data($session);
+	$terminating_status = $session->download_user_data($ts);
 }
 
 if ($terminating_status eq 'complete')
 {
+	$ts->output_status('Downloading final users data Complete');
 	$session->{end_time} = DateTime->now->datetime;
 	$session->{status} = 'complete';
 }
+
+
+$ts->output_status('Process finished.  Session has status: ' . $session->value('status'));
 
 exit;
 
