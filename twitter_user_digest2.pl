@@ -47,16 +47,15 @@ my $ids_to_harvest = $ts->config->users_to_harvest;
 
 if ($session->value('status') eq 'complete')
 {
-	if ($session->expired)
+	if ($session->expired($ts))
 	{
 		$ts->output_status('Previous harvest completed and interval exceeded, starting new session');
-		$session = ts->create_new_session();
+		$session = $ts->create_new_session();
 	}
 	else
 	{
 		$ts->output_status('No need to harvest yet, most recent harvest within the update interval');
 		push @{$LOG->{messages}}, 'Nothing to do';
-		return;
 	}
 }
 
@@ -141,8 +140,9 @@ if ($session->{status} eq 'terminating')
 if ($terminating_status eq 'complete')
 {
 	$ts->output_status('Downloading final users data Complete');
-	$session->{end_time} = DateTime->now->datetime;
-	$session->{status} = 'complete';
+	$session->set_value('end_time',DateTime->now->datetime);
+	$session->set_value('status','complete');
+	$session->commit($ts);
 }
 
 
