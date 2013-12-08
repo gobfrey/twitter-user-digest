@@ -11,6 +11,7 @@ use warnings;
 
 my $verbose = 0;
 my $config_file = undef;
+my $now = 0;
 
 my $LOG = {
 	harvest_count => {},
@@ -22,11 +23,12 @@ Getopt::Long::Configure("permute");
 GetOptions(
         'verbose' => \$verbose,
         'config=s' => \$config_file,
+	'now' => \$now,
 );
 
 if (!$config_file)
 {
-	my $msg = "twitter_user_digest.pl --config=<configfile> [--verbose]\n";
+	my $msg = "twitter_user_digest.pl --config=<configfile> [--verbose] [--now]\n";
 	die $msg;
 }
 
@@ -47,7 +49,10 @@ my $ids_to_harvest = $ts->config->users_to_harvest;
 
 if ($session->value('status') eq 'complete')
 {
-	if ($session->expired($ts))
+	if (
+		$session->expired($ts)
+		|| $now #command line param
+	)
 	{
 		$ts->output_status('Previous harvest completed and interval exceeded, starting new session');
 		$session = $ts->create_new_session();
