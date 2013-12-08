@@ -18,11 +18,11 @@ sub load
 
 	my $class_obj = bless {}, $class; #a fake object to make calling class functions easier
 	my $sql = $class_obj->_load_sql($id_bits);
+	my $id_fields = $class_obj->id_fields;
 	$class_obj = undef;
 
 	#collect values for parameterised query
 	my @id_vals;
-	my $id_fields = $class_obj->id_fields;
 	foreach my $f (@{$id_fields})
 	{
 		push @id_vals, $id_bits->{$f};
