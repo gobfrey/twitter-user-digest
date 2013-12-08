@@ -1,3 +1,4 @@
 secrets.ini
 activity.log
 snapshots
+*.swp

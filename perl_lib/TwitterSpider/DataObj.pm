@@ -20,7 +20,15 @@ sub load
 	my $sql = $class_obj->_load_sql($id_bits);
 	$class_obj = undef;
 
-	my $sth = $db->query($sql); 
+	#collect values for parameterised query
+	my @id_vals;
+	my $id_fields = $class_obj->id_fields;
+	foreach my $f (@{$id_fields})
+	{
+		push @id_vals, $id_bits->{$f};
+	} 
+
+	my $sth = $db->query($sql, @id_vals); 
 	if (!$sth->rows)
 	{
 		return undef;
@@ -43,7 +51,7 @@ sub _load_sql
 	foreach my $f (@{$id_fields})
 	{
 		die "missing ID field data $f when creating a $table\n" unless exists $id_bits->{$f};
-		push (@sql_where_bits, $f . " = " . $id_bits->{$f});
+		push (@sql_where_bits, $f . " = ? ");
 	}
 
 	my $sql = "SELECT * FROM " . $table ." WHERE " . join(' AND ', @sql_where_bits);
@@ -106,15 +114,17 @@ sub exists_in_db
 	#test if it exists in the database
 	my $id_fields = $self->id_fields;
 	my $id_bits = {};
+	my @id_vals;
 	foreach my $f (@{$id_fields})
 	{
 		return 0 if !$self->value($f);
 		$id_bits->{$f} = $self->value($f);	
+		push @id_vals, $self->value($f);
 	}
 
 	my $sql = $self->_load_sql($id_bits);
 
-	my $sth = $db->query($sql); 
+	my $sth = $db->query($sql, @id_vals); 
 	if ($sth->rows)
 	{
 		return 1;

@@ -220,6 +220,58 @@ sub write_extra
 
 }
 
+sub render_info
+{
+	my ($self, $spider) = @_;
+
+	my @html;
+
+	push @html, '<h2>User</h2>';
+
+
+
+	push @html, '<h2>Friends ('. $self->value('friends_state') .')</h2>';
+	my $sql = 'SELECT DISTINCT user.screen_name AS screen_name, user.id AS id
+		FROM user_friends JOIN user ON
+			user.session_id = user_friends.session_id
+			AND user.id = user_friends.friends_id
+		WHERE
+			user_friends.user_id = ' . $self->id . '
+			AND user_friends.session_id = ' . $self->value('session_id');
+	my $sth = $spider->db->query($sql);
+
+	push @html, '<ul>';
+	while (my $u = $sth->fetchrow_hashref)
+	{
+		push @html, '<li><a href="/snapshot?user=' . $u->{id} . '">' . $u->{screen_name} . '</a></li>';
+	}
+	push @html, '</ul>';
+	
+
+	push @html, '<h2>Followers</h2>';
+	push @html, '<h2>Tweets From</h2>';
+	push @html, '<h2>Tweets Mentioning</h2>';
+
+
+}
+
+sub render_all_root_users_list
+{
+	my ($spider) = @_;
+
+	my $sql = 'SELECT DISTINCT id, screen_name FROM user WHERE harvest_root = 1 ORDER BY screen_name';
+	my $sth = $spider->db->query($sql);
+
+	my @html;
+	push @html, '<ul>';
+	while (my $u = $sth->fetchrow_hashref)
+	{
+		push @html, '<li><a href="/snapshot?user=' . $u->{id} . '">' . $u->{screen_name} . '</a></li>';
+	}
+	push @html, '</ul>';
+	return join("\n", @html);
+}
+
 
 #non-oo call
 sub mysql_tabledef
