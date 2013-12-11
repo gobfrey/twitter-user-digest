@@ -74,6 +74,16 @@ sub query
 	return $sth;
 }
 
+#used to load all of everything for passing to the template
+sub selectall_arrayref
+{
+	my ($self, $sql, @args) = @_;
+
+	$self->connect unless $self->{dbi}; 
+
+	return $self->{dbi}->selectall_arrayref($sql, { Slice => {} }, @args);
+}
+
 #for use with user_friends and user_followers
 # f_type is 'friends' or 'followers'
 sub write_multiple_f

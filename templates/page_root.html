@@ -1,0 +1,11 @@
+[% INCLUDE header.html
+	title = 'Twitter Snapshotterer'
+%]
+
+<ul>
+[% FOREACH user IN users %]
+	<li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>
+[% END %]
+</ul>
+
+[% INCLUDE footer.html %]

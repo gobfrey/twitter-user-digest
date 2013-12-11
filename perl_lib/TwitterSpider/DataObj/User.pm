@@ -255,21 +255,21 @@ sub render_info
 
 }
 
-sub render_all_root_users_list
+#load all root users.
+#if session is defined, all root users in this session
+sub load_all_root_users
 {
-	my ($spider) = @_;
+	my ($spider, $session) = @_;
 
-	my $sql = 'SELECT DISTINCT id, screen_name FROM user WHERE harvest_root = 1 ORDER BY screen_name';
-	my $sth = $spider->db->query($sql);
+	my $sql = 'SELECT DISTINCT id, screen_name';
+	$sql .= ' FROM user';
+	$sql .= ' WHERE harvest_root = 1';
+	$sql .= ' AND session_id = ' . $session->id if $session;
+	$sql .= ' ORDER BY screen_name';
 
-	my @html;
-	push @html, '<ul>';
-	while (my $u = $sth->fetchrow_hashref)
-	{
-		push @html, '<li><a href="/snapshot?user=' . $u->{id} . '">' . $u->{screen_name} . '</a></li>';
-	}
-	push @html, '</ul>';
-	return join("\n", @html);
+	my $users = $spider->db->selectall_arrayref($sql);
+
+	return $users;
 }
 
 
