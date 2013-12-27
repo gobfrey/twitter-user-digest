@@ -1,5 +1,21 @@
 <html>
 <head>
 <title>[% title %]</title>
+<link rel="stylesheet" href="[% base_url %]/style.css" type="text/css" />
+<script type="text/javascript" src="[% base_url %]/js/vis.min.js"></script>
 </head>
 <body>
+
+<div id="visualization"></div>
+
+<script type="text/javascript">
+    var container = document.getElementById('visualization');
+    var items = [% timeline_nodes %];
+    var options = {
+      width: '100%',
+      height: '[% timeline_height %]'
+    };
+    var timeline = new vis.Timeline(container, items, options);
+</script>
+
+

@@ -27,6 +27,13 @@ sub new
 	return bless $data, $class;
 }
 
+sub value
+{
+	my ($self, @cfg_path) = @_;
+
+	return $self->{config}->val(@cfg_path);
+}
+
 sub cfg
 {
 	my ($self, @cfg_path) = @_;

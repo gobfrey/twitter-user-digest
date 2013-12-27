@@ -5,15 +5,20 @@ use TwitterSpider::DB;
 use TwitterSpider::DataObj::User;
 use TwitterSpider::DataObj::Session;
 use TwitterSpider::TwitterInterface;
+use TwitterSpider::PageContent;
 
 sub new
 {
-	my ($class, $config_file, $verbose) = @_;
+	my ($class, $config_file, $session_id, $user_id, $verbose) = @_;
 
 	die "Cannot create TwitterSpider without a config file\n" unless $config_file;
 	die "$config_file doesn't exist\n" unless -e $config_file;
 
-	my $self = bless {}, $class;
+	#the current user and session for context throughout
+	my $self = bless {
+		user_id => $user_id,
+		session_id => $session_id
+	}, $class;
 	
 	my $config = TwitterSpider::Config->new($config_file);
 	$self->{config} = $config;
@@ -27,6 +32,19 @@ sub new
 
 	return $self;
 }
+
+sub user_id
+{
+	my ($self) = @_;
+	return $self->{user_id};
+}
+
+sub session_id
+{
+	my ($self) = @_;
+	return $self->{session_id};
+}
+
 
 sub twitter
 {

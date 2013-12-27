@@ -1,0 +1,9 @@
+node_modules
+src
+test
+tools
+.idea
+bower.json
+Jakefile.js
+.npmignore
+.gitignore

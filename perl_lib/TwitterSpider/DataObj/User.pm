@@ -6,6 +6,59 @@ use TwitterSpider::DataObj;
 use strict;
 use warnings;
 
+sub load_previous
+{
+	my ($self, $spider) = @_;
+
+	my $prev_s_id = $self->previous_session_id($spider);
+	return undef unless $prev_s_id;
+
+	my $id_bits = {
+		session_id => $prev_s_id,
+		id => $self->id
+	};
+	return TwitterSpider::DataObj::User->load($spider, $id_bits)
+}
+
+#the id of the next session this user appears in.
+sub next_session_id
+{
+	my ($self, $spider) = @_;
+
+	my $sql = 'SELECT session_id FROM user ';
+	$sql .= 'WHERE session_id > ' . $self->value('session_id');
+	$sql .= ' AND id = ' . $self->id;
+	$sql .= ' ORDER BY session_id ';
+	$sql .= ' LIMIT 1';
+
+	my $sth = $spider->db->query($sql);
+
+	if (my $row = $sth->fetchrow_arrayref)
+	{
+		return $row->[0];
+	}
+	return undef;
+}
+
+#the id of the previous session this user appears in.
+sub previous_session_id
+{
+	my ($self, $spider) = @_;
+
+	my $sql = 'SELECT session_id FROM user ';
+	$sql .= 'WHERE session_id < ' . $self->value('session_id');
+	$sql .= ' AND id = ' . $self->id;
+	$sql .= ' ORDER BY session_id DESC ';
+	$sql .= ' LIMIT 1';
+
+	my $sth = $spider->db->query($sql);
+
+	if (my $row = $sth->fetchrow_arrayref)
+	{
+		return $row->[0];
+	}
+	return undef;
+}
 
 sub harvest_option
 {
@@ -26,6 +79,22 @@ sub session
 	my ($self, $spider) = @_;
 
 	return TwitterSpider::DataObj::Session->load($spider, { id => $self->value('session_id')});
+}
+
+#return an arrayref of sessions this user appears in, for rendering at the web front-end
+sub load_sessions_data
+{
+	my ($self, $spider) = @_;
+
+	my $id = $self->id;
+	my $sql = 'SELECT session.id, session.start_time ';
+	$sql .= 'FROM session JOIN user ON session.id = user.session_id ';
+	$sql .= 'WHERE user.id = ' . $id . ' ';
+	$sql .= 'ORDER BY session.id';
+
+	my $users = $spider->db->selectall_arrayref($sql);
+
+	return $users;
 }
 
 sub create
