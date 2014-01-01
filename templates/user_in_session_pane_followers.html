@@ -2,12 +2,14 @@
 <div class="span8">
 
 <h3>All Followers</h3>
+<p>Note that <span class="friend-and-follower">highlighted</span> users are both friends and followers.</p>
 <div class="row-fluid">
 <div class="span4">
+
 <ul>
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 0 %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+        <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
 [% END %]
 [% END %]
 </ul>
@@ -16,7 +18,7 @@
 <ul>
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 1 %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+        <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
 [% END %]
 [% END %]
 </ul>
@@ -25,7 +27,7 @@
 <ul>
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 2 %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+        <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
 [% END %]
 [% END %]
 </ul>

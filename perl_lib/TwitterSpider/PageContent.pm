@@ -73,8 +73,15 @@ sub prepare_user_in_session
 	$data->{user} = $user;
 	$data->{user_followers} = TwitterSpider::PageContent::user_list($spider, $user, 'followers');
 	$data->{user_friends} = TwitterSpider::PageContent::user_list($spider, $user, 'friends');
+
 	$data->{user_tweets_from} = $user->load_extra($spider,'tweets_from');
 	$data->{user_tweets_mentioning} = $user->load_extra($spider,'tweets_mentioning');
+
+	#count how many instances of each user are in the friends and followers lists
+	foreach my $u (@{$data->{user_followers}}, @{$data->{user_friends}})
+	{
+		$data->{ff_counts}->{$u->{id}}++;
+	}
 
 	#get user's state from previous session
 	$data->{prev_user} = $user->load_previous($spider);
