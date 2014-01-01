@@ -2,31 +2,41 @@
 	title = 'Twitter Snapshotterer'
 %]
 
-<div class="row-fluid">
-<div class="span12">
+<h1>@[% user.user_data_json.screen_name %]</h1>
+
 [% INCLUDE timeline.html %]
-</div>
-</div>
 
 <ul id="tabs" class="nav nav-tabs" data-tabs="tabs">
-    <li class="active"><a href="#overview" data-toggle="tab">Harvest Overview</a></li>
+    <li class="active"><a href="#overview" data-toggle="tab">Overview</a></li>
+[% IF user.friends_state == 'OK' %] 
     <li><a href="#friends" data-toggle="tab">Friends</a></li>
+[% END %]
+[% IF user.followers_state == 'OK' %] 
     <li><a href="#followers" data-toggle="tab">Followers</a></li>
+[% END %]
+[% IF user.tweets_from_state == 'OK' OR user.tweets_mentioning_state == OK %] 
     <li><a href="#tweets" data-toggle="tab">Tweets</a></li>
+[% END %]
 </ul>
 <div id="my-tab-content" class="tab-content">
     <div class="tab-pane active" id="overview">
         [% INCLUDE user_in_session_pane_overview.html %]
     </div>
+[% IF user.friends_state == 'OK' %] 
     <div class="tab-pane" id="friends">
         [% INCLUDE user_in_session_pane_friends.html %]
     </div>
+[% END %]
+[% IF user.followers_state == 'OK' %] 
     <div class="tab-pane" id="followers">
         [% INCLUDE user_in_session_pane_followers.html %]
     </div>
+[% END %]
+[% IF user.tweets_from_state == 'OK' OR user.tweets_mentioning_state == OK %] 
     <div class="tab-pane" id="tweets">
         [% INCLUDE user_in_session_pane_tweets.html %]
     </div>
+[% END %]
 </div>
 
  

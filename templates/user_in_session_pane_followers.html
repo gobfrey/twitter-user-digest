@@ -6,7 +6,7 @@
 <div class="row-fluid">
 <div class="span4">
 
-<ul>
+<ul class="unstyled">
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 0 %]
         <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
@@ -15,7 +15,7 @@
 </ul>
 </div>
 <div class="span4">
-<ul>
+<ul class="unstyled">
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 1 %]
         <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
@@ -24,7 +24,7 @@
 </ul>
 </div>
 <div class="span4">
-<ul>
+<ul class="unstyled">
 [% FOREACH user IN user_followers %]
 [% IF loop.index % 3 == 2 %]
         <li [% IF ff_counts.item(user.id) > 1 %]class="friend-and-follower"[% END %]  ><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
@@ -38,14 +38,14 @@
 <div class="span4">
 
 <h3>New Followers</h3>
-<ul>
+<ul class="unstyled">
 [% FOREACH user IN user_followers_new %]
         <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
 [% END %]
 </ul>
 
 <h3>Un-Followers</h3>
-<ul>
+<ul class="unstyled">
 [% FOREACH user IN user_followers_gone %]
         <li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>
 [% END %]

@@ -1,12 +1,34 @@
 <html>
 <head>
-<title>[% title %]</title>
-<link rel="stylesheet" href="[% base_url %]/style.css" type="text/css" />
+<title>Tweeter Snapper - [% title %]</title>
+<link rel="stylesheet" href="[% base_url %]/css/uos-internal.css" type="text/css" />
 <link rel="stylesheet" href="[% base_url %]/bootstrap/css/bootstrap.min.css" type="text/css" />
+<link rel="stylesheet" href="[% base_url %]/css/style.css" type="text/css" />
 <script type="text/javascript" src="[% base_url %]/js/vis.min.js"></script>
 <script type="text/javascript" src="[% base_url %]/js/jquery-2.0.3.min.js"></script>
 </head>
 <body>
+
+<div class="uos-container">
+<header>
+<div class="uos-header" id="uos-header">
+  <div class="uos-logo"></div>
+  <div class="uos-app-name">
+  <h1>Tweeter Snapper</h1>
+  <h2>Time-Based Social Network Capture</h2>
+  </div>
+
+  <div class="uos-main-nav">
+  <a href="[% script_url %]">Home</a>
+<a href="[% script_url %]?admin=1" class="uos-selected">Admin</a>
+</div>
+<div class="uos-second-nav"></div>
+</div>
+
+</header>
+</div>
+
+
 <div class="container">
 <div id="content">
 

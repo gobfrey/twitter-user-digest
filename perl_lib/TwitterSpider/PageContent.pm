@@ -45,7 +45,7 @@ sub prepare_home
 
 		#create html content
 		my $html = ''; #"<strong>Session $id</strong>";
-		$html .= "<ul>";
+		$html .= "<ul class='unstyled'>";
 		foreach my $user (@{$session->{_users}})
 		{
 			$html .= '<li>';

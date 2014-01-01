@@ -1,0 +1,16 @@
+.uos-app-name h1
+{
+	/* Override bootstrap */
+	font-size: 38.5px;
+	line-height: 20px;
+	padding: 0px;
+}
+
+body {
+	background: white;
+}
+
+.friend-and-follower {
+	background-color: LavenderBlush;
+}
+
