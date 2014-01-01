@@ -1,0 +1,53 @@
+<div class="row-fluid">
+<div class="span8">
+
+<h3>All Friends</h3>
+<div class="row-fluid">
+<div class="span4">
+<ul>
+[% FOREACH user IN user_friends %]
+[% IF loop.index % 3 == 0 %]
+        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+[% END %]
+[% END %]
+</ul>
+</div>
+<div class="span4">
+<ul>
+[% FOREACH user IN user_friends %]
+[% IF loop.index % 3 == 1 %]
+        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+[% END %]
+[% END %]
+</ul>
+</div>
+<div class="span4">
+<ul>
+[% FOREACH user IN user_friends %]
+[% IF loop.index % 3 == 2 %]
+        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+[% END %]
+[% END %]
+</ul>
+</div>
+</div>
+
+</div>
+<div class="span4">
+
+<h3>New Friends</h3>
+<ul>
+[% FOREACH user IN user_friends_new %]
+        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
+[% END %]
+</ul>
+
+<h3>Un-Friends</h3>
+<ul>
+[% FOREACH user IN user_friends_gone %]
+        <li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>
+[% END %]
+</ul>
+
+</div>
+</div>

@@ -1,0 +1,50 @@
+<div class="row-fluid">
+
+<div class="span7">
+
+<h3>User</h3>
+<table>
+<tr><th>Screen Name</th><td>[% user.user_data_json.screen_name %]</td>
+<tr><th>Name</th><td>[% user.user_data_json.name %]</td>
+<tr><th>URL</th><td><a href="[% user.user_data_json.url %]">[% user.user_data_json.url %]</a></td>
+
+<tr><th>Profile Image</th><td><img src="[% user.user_data_json.profile_image_url %]"/></td>
+<tr><th>Description</th><td>[% user.user_data_json.description %]</td>
+<tr><th>Location</th><td>[% user.user_data_json.location %]</td>
+<tr><th>Protected</th><td>[% user.user_data_json.protected %]</td>
+<tr><th>Tweets</th><td>[% user.user_data_json.statuses_count %]</td>
+<tr><th>Friends</th><td>[% user.user_data_json.friends_count %]</td>
+<tr><th>Followers</th><td>[% user.user_data_json.followers_count %]</td>
+</table>
+
+</div>
+<div class="span5">
+
+<h3>Session</h3>
+<table>
+<tr><th>ID</th><td>[% session.id %]</td></tr>
+<tr><th>Start Time</th><td>[% session.start_time %]</td></tr>
+<tr><th>End Time</th><td>[% session.end_time %]</td></tr>
+<tr><th>Navigation</th><td>
+[% IF previous_session_id %]
+<a href="[% script_url %]?user=[% user_id %]&session=[% previous_session_id %]">Previous</a>
+[% END %]
+&nbsp;|&nbsp;
+[% IF next_session_id %]
+<a href="[% script_url %]?user=[% user_id %]&session=[% next_session_id %]">Next</a>
+[% END %]
+</td></tr>
+</table>
+
+<h3>User Status</h3>
+<table>
+<tr><th>User Metadata</th><td>[% user.user_data_state %]</td>
+<tr><th>Friends</th><td>[% user.friends_state %]</td>
+<tr><th>Followers</th><td>[% user.followers_state %]</td>
+<tr><th>Tweets From</th><td>[% user.tweets_from_state %]</td>
+<tr><th>Tweets Mentioning</th><td>[% user.tweets_mentioning_state %]</td>
+
+</table>
+
+</div>
+</div>

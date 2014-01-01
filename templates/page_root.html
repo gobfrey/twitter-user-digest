@@ -2,6 +2,8 @@
 	title = 'Twitter Snapshotterer'
 %]
 
+[% INCLUDE timeline.html %]
+
 <ul>
 [% FOREACH user IN users %]
 	<li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>

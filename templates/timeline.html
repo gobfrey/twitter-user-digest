@@ -1,0 +1,13 @@
+<div id="visualization"></div>
+
+<script type="text/javascript">
+    var container = document.getElementById('visualization');
+    var items = [% timeline_nodes %];
+    var options = {
+      width: '100%',
+      height: '[% timeline_height %]'
+    };
+    var timeline = new vis.Timeline(container, items, options);
+</script>
+
+

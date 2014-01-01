@@ -1,0 +1,24 @@
+<div class="row-fluid">
+<div class="span6">
+<h3>Tweets From</h3>
+<dl>
+[% FOREACH tweet IN user_tweets_from %]
+	<dt>[% tweet.user.screen_name %] ([% tweet.created_at %])</dt>
+        <dd>[% tweet.text %]</dd>
+[% END %]
+</dl>
+
+</div>
+<div class="span6">
+
+<h3>Tweets Mentioning</h3>
+
+<dl>
+[% FOREACH tweet IN user_tweets_mentioning %]
+	<dt>[% tweet.user.screen_name %] ([% tweet.created_at %])</dt>
+        <dd>[% tweet.text %]</dd>
+[% END %]
+</dl>
+
+</div>
+</div>

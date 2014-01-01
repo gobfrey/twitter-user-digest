@@ -2,121 +2,39 @@
 	title = 'Twitter Snapshotterer'
 %]
 
+<div class="row-fluid">
+<div class="span12">
+[% INCLUDE timeline.html %]
+</div>
+</div>
 
-<h2>Session</h2>
-<table>
-<tr><th>ID</th><td>[% session.id %]</td></tr>
-<tr><th>Start Time</th><td>[% session.start_time %]</td></tr>
-<tr><th>End Time</th><td>[% session.end_time %]</td></tr>
-</table>
-<table><tr>
-[% IF previous_session_id %]
-<td><a href="[% script_url %]?user=[% user_id %]&session=[% previous_session_id %]">Previous Session</a></td>
-[% END %]
-[% IF next_session_id %]
-<td><a href="[% script_url %]?user=[% user_id %]&session=[% next_session_id %]">Next Session</a></td>
-[% END %]
-</tr></table>
-
-<h2>User</h2>
-<table>
-<tr><th>Screen Name</th><td>[% user.user_data_json.screen_name %]</td>
-<tr><th>Name</th><td>[% user.user_data_json.name %]</td>
-<tr><th>URL</th><td><a href="[% user.user_data_json.url %]">[% user.user_data_json.url %]</a></td>
-
-<tr><th>Profile Image</th><td><img src="[% user.user_data_json.profile_image_url %]"/></td>
-<tr><th>Description</th><td>[% user.user_data_json.description %]</td>
-<tr><th>Location</th><td>[% user.user_data_json.location %]</td>
-<tr><th>Protected</th><td>[% user.user_data_json.protected %]</td>
-<tr><th>Tweets</th><td>[% user.user_data_json.statuses_count %]</td>
-<tr><th>Friends</th><td>[% user.user_data_json.friends_count %]</td>
-<tr><th>Followers</th><td>[% user.user_data_json.followers_count %]</td>
-</table>
-
-<h2>Harvest State</h2>
-<table>
-<tr><th>User Metadata</th><td>[% user.user_data_state %]</td>
-<tr><th>Friends</th><td>[% user.friends_state %]</td>
-<tr><th>Followers</th><td>[% user.followers_state %]</td>
-<tr><th>Tweets From</th><td>[% user.tweets_from_state %]</td>
-<tr><th>Tweets Mentioning</th><td>[% user.tweets_mentioning_state %]</td>
-
-</table>
-
-<h2>Extras</h2>
-<table>
-<tr>
-  <th>All Followers</th>
-  <th>New Followers</th>
-  <th>Un-Followers</th>
-  <th>All Friends</th>
-  <th>New Friends</th>
-  <th>Un-Friends</th>
-  <th>Tweets From</th>
-  <th>Tweets Mentioning</th>
-</tr>
-<tr>
-<td>
-<ul>
-[% FOREACH user IN user_followers %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
-[% END %]
+<ul id="tabs" class="nav nav-tabs" data-tabs="tabs">
+    <li class="active"><a href="#overview" data-toggle="tab">Harvest Overview</a></li>
+    <li><a href="#friends" data-toggle="tab">Friends</a></li>
+    <li><a href="#followers" data-toggle="tab">Followers</a></li>
+    <li><a href="#tweets" data-toggle="tab">Tweets</a></li>
 </ul>
-</td>
-<td>
-<ul>
-[% FOREACH user IN user_followers_new %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
-[% END %]
-</ul>
-</td>
-<td>
-<ul>
-[% FOREACH user IN user_followers_gone %]
-        <li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>
-[% END %]
-</ul>
-</td>
-<td>
-<ul>
-[% FOREACH user IN user_friends %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
-[% END %]
-</ul>
-</td>
-<td>
-<ul>
-[% FOREACH user IN user_friends_new %]
-        <li><a href="[% script_url %]?user=[% user.id %]&session=[% session.id %]">[% user.screen_name %]</a></li>
-[% END %]
-</ul>
-</td>
-<td>
-<ul>
-[% FOREACH user IN user_friends_gone %]
-        <li><a href="[% script_url %]?user=[% user.id %]">[% user.screen_name %]</a></li>
-[% END %]
-</ul>
-</td>
-<td>
-<dl>
-[% FOREACH tweet IN user_tweets_from %]
-	<dt>[% tweet.user.screen_name %]</dt>
-        <dd>[% tweet.text %]</dd>
-[% END %]
-</dl>
-</td>
-<td>
-<dl>
-[% FOREACH tweet IN user_tweets_mentioning %]
-	<dt>[% tweet.user.screen_name %]</dt>
-        <dd>[% tweet.text %]</dd>
-[% END %]
-</dl>
-</td>
-</table>
+<div id="my-tab-content" class="tab-content">
+    <div class="tab-pane active" id="overview">
+        [% INCLUDE user_in_session_pane_overview.html %]
+    </div>
+    <div class="tab-pane" id="friends">
+        [% INCLUDE user_in_session_pane_friends.html %]
+    </div>
+    <div class="tab-pane" id="followers">
+        [% INCLUDE user_in_session_pane_followers.html %]
+    </div>
+    <div class="tab-pane" id="tweets">
+        [% INCLUDE user_in_session_pane_tweets.html %]
+    </div>
+</div>
 
-
+ 
+<script type="text/javascript">
+    jQuery(document).ready(function ($) {
+        $('#tabs').tab();
+    });
+</script>    
 
 
 [% INCLUDE footer.html %]
