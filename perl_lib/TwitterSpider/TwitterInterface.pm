@@ -114,7 +114,8 @@ sub connect_to_twitter
 		consumer_secret     => $cfg->secret('twitter_api_keys','consumer_secret'),
 		access_token        => $cfg->secret('twitter_api_keys','access_token'),
 		access_token_secret => $cfg->secret('twitter_api_keys','access_token_secret'),
-		traits => [qw/API::RESTv1_1/]
+		traits => [qw/API::RESTv1_1/],
+		ssl => 1
 	);
 
 	my $twitter = Net::Twitter::Lite::WithAPIv1_1->new( %nt_args );
